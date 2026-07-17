@@ -9,12 +9,14 @@ writes through ``CalibredbRunner`` (the one invariant a reviewer checks).
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from .backup import backup_metadata_db, trash_book_files
 from .calibredb_runner import CalibredbRunner
 from .config import Config
 from .confirmation import plan_token, verify
+from .ebook_convert_runner import EbookConvertRunner
 from .errors import InvalidInputError
 from .sqlite_reader import Book, SqliteReader
 
@@ -60,6 +62,7 @@ class CalibreLibrary:
         self._config = config
         self._reader = SqliteReader(config.db_path, config.library_path)
         self._runner = CalibredbRunner(config.library_path)
+        self._converter = EbookConvertRunner()
 
     def search_books(self, query: str) -> list[Book]:
         """Resolve ids via ``calibredb search`` then hydrate them (SEARCH-01).
@@ -107,6 +110,49 @@ class CalibreLibrary:
         return {
             "group_count": len(groups),
             "groups": [self._shape_duplicate_group(group) for group in groups],
+        }
+
+    def convert_book(self, book_id: int, target_format: str) -> dict:
+        """Convert a book to ``target_format``, keeping the existing format(s)
+        (CONV-01, AD-011, AD-016).
+
+        Additive, single-step (like ``add_book``): refuses if ``target_format``
+        already exists on the book rather than a confirm gate. Converts into a
+        temp dir (cleaned up even on failure), backs up ``metadata.db`` BEFORE
+        ``add_format``, then re-reads and returns the book with both formats.
+        """
+        target = target_format.lower()
+        if target not in SUPPORTED_CONVERT_FORMATS:
+            allowed = ", ".join(SUPPORTED_CONVERT_FORMATS)
+            raise InvalidInputError(
+                f"unsupported target format {target_format!r}; allowed: {allowed}"
+            )
+
+        book = self._reader.get_book(book_id)  # exists-precheck, no write
+        if target.upper() in book.formats:
+            raise InvalidInputError(
+                f"book {book_id} already has format {target.upper()}; nothing to do"
+            )
+
+        source_files = self._reader.format_files(book_id)  # AC-4 precheck
+        if not source_files:
+            raise InvalidInputError(f"book {book_id} has no file to convert from")
+        source = next(iter(source_files.values()))
+
+        with tempfile.TemporaryDirectory() as out_dir:
+            converted = self._converter.convert(  # AC-5 failure propagates, no write
+                source, target, Path(out_dir)
+            )
+            backup = backup_metadata_db(  # AD-011: backup BEFORE add_format
+                self._config.db_path, self._config.backup_root
+            )
+            self._runner.add_format(book_id, converted)
+
+        return {
+            "status": "converted",
+            "book_id": book_id,
+            "book": self._reader.get_book(book_id),  # re-read: old + new formats
+            "backup": str(backup),
         }
 
     # -- mutations (plan -> confirm, backup-before-write) ------------------

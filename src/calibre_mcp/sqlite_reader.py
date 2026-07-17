@@ -248,9 +248,15 @@ class SqliteReader:
 
         files: dict[str, Path] = {}
         for row in data_rows:
+            # NOTE: build the filename by concatenation, not Path.with_suffix —
+            # data.name routinely contains literal periods (e.g. "Robert C.
+            # Martin") that with_suffix would misread as an existing extension
+            # and corrupt when replacing it.
             file_path = (
-                self._library_path / book_row["path"] / row["name"]
-            ).with_suffix(f".{row['format'].lower()}")
+                self._library_path
+                / book_row["path"]
+                / f"{row['name']}.{row['format'].lower()}"
+            )
             if not file_path.is_file():
                 raise InvalidInputError(
                     f"format file for book {book_id} ({row['format']}) not "
