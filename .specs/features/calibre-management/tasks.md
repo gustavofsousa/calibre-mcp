@@ -119,7 +119,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T2: Error taxonomy
+### T2: Error taxonomy  — **Status: ✅ Complete**
 
 **What**: The exception hierarchy every layer maps failures to.
 **Where**: `src/calibre_mcp/errors.py`
