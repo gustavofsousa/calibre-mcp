@@ -153,6 +153,37 @@ def test_convert_book_adds_new_format_keeps_old(
 
 
 @pytest.mark.integration
+def test_convert_book_backs_up_before_add_format_not_after(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path, monkeypatch
+):
+    # CONV-01 AC-6 / AD-011: backup must happen BEFORE add_format, not merely
+    # exist afterward — records call order via spies on both.
+    book_id = _seed_book(scratch_library, tmp_path)
+    calls: list[str] = []
+
+    import calibre_mcp.library as library_module
+
+    real_backup = library_module.backup_metadata_db
+
+    def _spy_backup(*args, **kwargs):
+        calls.append("backup")
+        return real_backup(*args, **kwargs)
+
+    real_add_format = facade._runner.add_format
+
+    def _spy_add_format(*args, **kwargs):
+        calls.append("add_format")
+        return real_add_format(*args, **kwargs)
+
+    monkeypatch.setattr(library_module, "backup_metadata_db", _spy_backup)
+    monkeypatch.setattr(facade._runner, "add_format", _spy_add_format)
+
+    facade.convert_book(book_id, "pdf")
+
+    assert calls == ["backup", "add_format"]
+
+
+@pytest.mark.integration
 def test_convert_book_refuses_when_target_format_already_exists(
     facade: CalibreLibrary, scratch_library: Path, backup_root: Path, tmp_path: Path
 ):
@@ -358,6 +389,25 @@ def test_email_book_no_attachable_format_refuses_before_sending(
 
     assert "PDF" in str(excinfo.value)
     assert not smtp_record.exists()
+
+
+@pytest.mark.integration
+def test_email_book_explicit_format_picks_that_file_not_the_default(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+):
+    # EMAIL-01 AC-3: explicit format wins over the epub->azw3->mobi->pdf default
+    # when the book has both — resolved format/file must be the PDF, not EPUB.
+    book_id = _seed_book(scratch_library, tmp_path)
+    mailer_facade.convert_book(book_id, "pdf")  # book now has EPUB and PDF
+    pdf_path = mailer_facade._reader.format_files(book_id)["PDF"]
+
+    plan = mailer_facade.email_book(book_id, "bob@example.com", format="pdf")
+
+    assert plan["format"] == "PDF"
+    assert plan["file"] == str(pdf_path)
 
 
 @pytest.mark.integration

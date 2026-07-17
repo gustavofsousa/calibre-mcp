@@ -481,3 +481,15 @@ def test_email_book_description_instructs_host_to_surface_plan():
 
     assert "host" in text and "surface" in text
     assert "confirmation_token" in text
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_p2_tool_calls(mailer_seeded: int, smtp_record: Path):
+    # T10 Done-when: stdout stays clean across the 3 new tools too.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _call("find_duplicates", {})
+        _call("convert_book", {"book_id": mailer_seeded, "target_format": "pdf"})
+        _call("email_book", {"book_id": mailer_seeded, "recipient": "bob@x.com"})
+
+    assert buffer.getvalue() == ""

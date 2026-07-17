@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "promote_threshold": 2,
+  "window_days": 45,
+  "quarantine_threshold": 2,
+  "next_id": 3,
+  "lessons": [
+    {
+      "id": "L-001",
+      "key": "surviving_mutant::when a facade method backs up before a write for ad 011 safety add a call order test spy monkeypatch recording invocation order not just a post hoc existence check on the backup file",
+      "text": "When a facade method backs up before a write for AD-011 safety, add a call-order test (spy/monkeypatch recording invocation order), not just a post-hoc existence check on the backup file.",
+      "signal": "surviving_mutant",
+      "scope": "library-facade",
+      "status": "candidate",
+      "features": [
+        "calibre-management-p2"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "src/calibre_mcp/library.py:144-151 (mutant 4, validation.md) (library-facade)"
+      ],
+      "created": "2026-07-17T15:11:39Z",
+      "last_seen": "2026-07-17T15:11:39Z"
+    },
+    {
+      "id": "L-002",
+      "key": "ac_gap::when an ac names two branches explicit choice vs default preference fallback write a passing case test for each branch not just the fallback success case and the explicit choice failure case",
+      "text": "When an AC names two branches (explicit choice vs. default-preference fallback), write a passing-case test for each branch, not just the fallback success case and the explicit-choice failure case.",
+      "signal": "ac_gap",
+      "scope": "test-coverage",
+      "status": "candidate",
+      "features": [
+        "calibre-management-p2"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        "EMAIL-01 AC-3 (spec.md); tests/integration/test_library_p2.py (test-coverage)"
+      ],
+      "created": "2026-07-17T15:11:39Z",
+      "last_seen": "2026-07-17T15:11:39Z"
+    }
+  ]
+}
