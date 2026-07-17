@@ -113,6 +113,7 @@ def test_list_books_returns_seeded_book(seeded: int):
 
     assert payload["count"] == 1
     assert payload["books"][0]["id"] == seeded
+    assert payload["total"] == 1  # SEARCH-02: total is the library's full size
 
 
 @pytest.mark.e2e

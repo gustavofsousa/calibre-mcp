@@ -87,6 +87,15 @@ class SqliteReader:
             conn.close()
         return [book for book in books if book is not None]
 
+    def count_books(self) -> int:
+        """Return the total number of books in the library, independent of paging."""
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT COUNT(*) AS n FROM books").fetchone()
+        finally:
+            conn.close()
+        return row["n"]
+
     def list_books(self, limit: int, offset: int, sort: str) -> list[Book]:
         """Return a page of books ordered by ``sort`` (SEARCH-02).
 

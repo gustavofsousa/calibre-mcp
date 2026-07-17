@@ -94,6 +94,16 @@ def test_list_books_paginates_disjoint_windows(facade: CalibreLibrary):
 
 
 @pytest.mark.integration
+def test_count_books_reports_full_size_not_page_size(facade: CalibreLibrary):
+    # SEARCH-02: total count is independent of the 50-item page cap (lib has 170).
+    total = facade.count_books()
+    page = facade.list_books()
+
+    assert total > len(page)
+    assert total == 170
+
+
+@pytest.mark.integration
 def test_get_book_returns_full_record(facade: CalibreLibrary):
     # VIEW-01: valid id -> full record read from metadata.db.
     book = facade.get_book(1)

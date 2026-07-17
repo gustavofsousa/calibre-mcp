@@ -12,6 +12,7 @@ SEARCH-02: list_books returns a page ordered by the requested field.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,19 @@ def test_hydrate_skips_missing_ids(reader: SqliteReader):
     books = reader.hydrate([1, 999999, 2])
 
     assert [b.id for b in books] == [1, 2]
+
+
+@pytest.mark.integration
+def test_count_books_matches_independent_query(
+    reader: SqliteReader, real_library: Path
+):
+    # SEARCH-02: count_books reports the full library size, not a page size.
+    conn = sqlite3.connect(
+        f"file:{real_library / 'metadata.db'}?mode=ro", uri=True
+    )
+    try:
+        expected = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert reader.count_books() == expected

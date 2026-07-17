@@ -81,6 +81,10 @@ class CalibreLibrary:
         capped = DEFAULT_LIMIT if limit is None else min(limit, DEFAULT_LIMIT)
         return self._reader.list_books(capped, offset, sort)
 
+    def count_books(self) -> int:
+        """Return the total number of books in the library (unaffected by paging)."""
+        return self._reader.count_books()
+
     def get_book(self, book_id: int) -> Book:
         """Return one book's full record; propagates ``BookNotFoundError``
         (VIEW-01/02) and ``InvalidInputError`` for a non-int id (VIEW-03)."""

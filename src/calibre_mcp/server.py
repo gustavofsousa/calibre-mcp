@@ -101,14 +101,18 @@ def list_books(limit: int | None = None, offset: int = 0, sort: str = "id") -> d
     """List a page of books ordered by ``sort`` (SEARCH-02).
 
     ``sort`` is one of: id, title, authors, pubdate, timestamp. ``limit``
-    defaults to and is capped at 50; use ``offset`` to page. Pure SQLite and
+    defaults to and is capped at 50; use ``offset`` to page. ``total`` in the
+    response is the library's full book count, independent of paging — use it
+    to know how many ``offset`` pages to request. Pure SQLite and
     lock-independent, so this is the fallback when the Calibre GUI holds the
     library lock.
     """
-    books = _get_library().list_books(limit=limit, offset=offset, sort=sort)
+    library = _get_library()
+    books = library.list_books(limit=limit, offset=offset, sort=sort)
     return {
         "count": len(books),
         "offset": offset,
+        "total": library.count_books(),
         "books": [_book_to_dict(b) for b in books],
     }
 
