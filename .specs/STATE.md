@@ -69,6 +69,19 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   and email (attachment). Reads stay in the read layer (AD-001); `SqliteReader` gains the library root
   in its constructor.
 
+- **AD-018 — Project direction: personal use, polished (not open source).** Confirmed 2026-07-17.
+  Single user, single library; no packaging/distribution/multi-library-config work planned.
+  STATS-01 is now in-spec (Phase 1); see `.specs/features/library-stats/spec.md`.
+- **AD-019 — Ambition: full GUI replacement, resequenced roadmap.** Confirmed 2026-07-17. User
+  wants calibre-mcp to eventually cover everything they currently use the Calibre GUI for — covers,
+  bulk operations, author/tag/series organization, library maintenance — "the best server
+  possible... fast and very good," not just the narrower P1/P2/enrichment scope. Does not revise
+  AD-018 (still personal use, still no packaging). Resequences the previous roadmap: Phase 2 is
+  now Bulk Operations & Library Organization (no new external dependency, reuses existing Verified
+  primitives) instead of Metadata Enrichment — enrichment/covers move to Phase 3 since they
+  introduce the project's first outbound-network dependency and deserve their own hardening pass.
+  Full roadmap — phases, candidate features, phase-gates — lives in `.specs/ROADMAP.md`.
+
 ## Backlog — deferred (post-P2)
 
 - **STATS-01 — Library baseline profile exposed by the server (P3, after P2).** Surface aggregate
@@ -113,8 +126,10 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   calibre-management-p2/validation.md`. **Also fixed in T8**: a real bug in T3's `format_files`
   (`Path.with_suffix` corrupted filenames when Calibre's `data.name` contains a literal period, e.g.
   "Robert C. Martin") — now built by concatenation instead.
-- **Next step:** none in flight. STATS-01 (library baseline profile, P3) remains in the Backlog
-  section above, deferred until traction warrants — see that section for the two design options.
+- **Next step:** STATS-01 spec finalized this session (`.specs/features/library-stats/spec.md`,
+  Option A — MCP resource, user-confirmed). Ready for Design/Execute. Full project roadmap
+  (Phase 1 STATS-01 → Phase 2 metadata enrichment → Phase 3 device/distribution integrations →
+  Phase 4 background polish) recorded in `.specs/ROADMAP.md` per AD-018.
 - **Spec:** `.specs/features/calibre-management/spec.md` (P1, 31 requirements, 29 P1 / 2 P2) and
   `.specs/features/calibre-management-p2/spec.md` (P2, 3 requirements — CONV-01/ORG-01/EMAIL-01, all
   Verified).
