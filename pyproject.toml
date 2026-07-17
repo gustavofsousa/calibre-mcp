@@ -7,6 +7,9 @@ dependencies = [
     "mcp>=1.2.0",
 ]
 
+[project.scripts]
+calibre-mcp = "calibre_mcp.server:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -53,10 +53,13 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 
 ## Handoff
 
-- **Phase:** Tasks — design confirmed by user; `tasks.md` written for P1 (10 atomic tasks, 4 phases,
-  29/29 P1 requirements mapped). Awaiting task approval before Execute.
-- **Next step:** On approval → Execute. 4 phases → offer one sub-agent per phase (offer-then-confirm);
-  fresh Verifier runs automatically after the last task.
+- **Phase:** Execute — COMPLETE. All 10 tasks (T1–T10) implemented and committed; 29/29 P1
+  requirements covered. Full gate green: `ruff check` clean + `pytest` 86 passed. End-to-end
+  demonstrated: server boots over stdio, MCP `initialize` + `tools/list` returns all 6 tools, and
+  a live `list_books` call reads the real library. Packaging finished: `calibre-mcp` console script
+  (`[project.scripts]`) + `python -m calibre_mcp` entry point; README with Claude Desktop/Code setup.
+- **Next step:** P2 backlog when traction warrants — CONV-01 (convert) and ORG-01
+  (organize/deduplicate). Not started.
 - **Spec:** `.specs/features/calibre-management/spec.md` (31 requirements, 29 P1 / 2 P2).
 - **Design:** `.specs/features/calibre-management/design.md` (8 modules: config, errors,
   sqlite_reader, calibredb_runner, backup, confirmation, library, server).
