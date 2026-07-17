@@ -133,9 +133,9 @@ the password string appears in **no** returned value, log, or exception text.
 
 | Requirement ID | Story                     | Phase  | Status   |
 | -------------- | ------------------------- | ------ | -------- |
-| CONV-01        | P2: Convert formats       | Tasks  | Planned  |
-| ORG-01         | P2: Organize & dedup      | Tasks  | Planned  |
-| EMAIL-01       | P2: Email a book's file   | Tasks  | Planned  |
+| CONV-01        | P2: Convert formats       | Execute | Verified |
+| ORG-01         | P2: Organize & dedup      | Execute | Verified |
+| EMAIL-01       | P2: Email a book's file   | Execute | Verified |
 
 **ID format:** `[CATEGORY]-[NUMBER]`
 **Status values:** Pending → In Design → In Tasks/Planned → Implementing → Verified

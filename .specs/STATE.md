@@ -101,26 +101,26 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 
 ## Handoff
 
-- **Phase:** Execute — COMPLETE. All 10 tasks (T1–T10) implemented and committed; 29/29 P1
-  requirements covered. Full gate green: `ruff check` clean + `pytest` 86 passed. End-to-end
-  demonstrated: server boots over stdio, MCP `initialize` + `tools/list` returns all 6 tools, and
-  a live `list_books` call reads the real library. Packaging finished: `calibre-mcp` console script
-  (`[project.scripts]`) + `python -m calibre_mcp` entry point; README with Claude Desktop/Code setup.
-- **Next step:** P2 Execute IN PROGRESS (2026-07-17) — `.specs/features/calibre-management-p2/`.
-  Phase 1 (T1 errors, T2 SMTP config) and Phase 2 (T3 reader format_files/find_duplicate_groups,
-  T4 EbookConvertRunner, T5 CalibreSmtpRunner, T6 calibredb add_format) are **done**, each its own
-  atomic commit, executed inline (user declined per-phase sub-agents). Full gate green after every
-  task: `ruff check` clean + `pytest` 111 passed (up from 88 at P1). `SqliteReader` constructor now
-  takes `(db_path, library_path)` — `CalibreLibrary` and existing tests updated to match.
-  **Remaining:** Phase 3 (T7 facade `find_duplicates`, T8 facade `convert_book`, T9 facade
-  `email_book` — sequential, same file `library.py`) and Phase 4 (T10 FastMCP tool surface). The
-  feature-level Verifier has NOT run yet — it only runs after T10 (the last task). Do not report P2
-  as done until T7–T10 are implemented and the Verifier returns PASS.
-  Env verified: `ebook-convert` + `calibre-smtp` on PATH (Calibre 8.2.100).
-- **Spec:** `.specs/features/calibre-management/spec.md` (31 requirements, 29 P1 / 2 P2).
-- **Design:** `.specs/features/calibre-management/design.md` (8 modules: config, errors,
-  sqlite_reader, calibredb_runner, backup, confirmation, library, server).
-- **Tasks:** `.specs/features/calibre-management/tasks.md` — Phase 1 (T1 scaffold→T2 errors→T3 config),
-  Phase 2 [P] (T4 reader, T5 backup, T6 confirm, T7 runner), Phase 3 (T8 facade reads→T9 facade
-  mutations), Phase 4 (T10 server). Stack: uv + pytest + ruff (ruff = new MICRO tooling choice).
+- **Phase:** P1 and P2 both COMPLETE and Verified. P1: all 10 tasks (T1–T10), 29/29 P1 requirements.
+  P2 (`calibre-management-p2`, 2026-07-17): all 10 tasks (T1–T10) — CONV-01 (`convert_book`), ORG-01
+  (`find_duplicates`), EMAIL-01 (`email_book`) — implemented, each its own atomic commit, executed
+  inline (user declined per-phase sub-agents). Full gate green: `ruff check` clean + `pytest` 137
+  passed (up from 88 at P1 baseline). `SqliteReader` constructor now takes `(db_path, library_path)`.
+  The independent Verifier ran after T10, found 1 surviving mutant + 2 coverage gaps (backup-before-
+  `add_format` ordering untested for `convert_book`; EMAIL-01 AC-3 explicit-format success path
+  untested; T10's stdout-clean assertion didn't cover the 3 new tools) — all three fixed and
+  re-verified PASS (iteration 2 of the fix→re-verify loop). Report: `.specs/features/
+  calibre-management-p2/validation.md`. **Also fixed in T8**: a real bug in T3's `format_files`
+  (`Path.with_suffix` corrupted filenames when Calibre's `data.name` contains a literal period, e.g.
+  "Robert C. Martin") — now built by concatenation instead.
+- **Next step:** none in flight. STATS-01 (library baseline profile, P3) remains in the Backlog
+  section above, deferred until traction warrants — see that section for the two design options.
+- **Spec:** `.specs/features/calibre-management/spec.md` (P1, 31 requirements, 29 P1 / 2 P2) and
+  `.specs/features/calibre-management-p2/spec.md` (P2, 3 requirements — CONV-01/ORG-01/EMAIL-01, all
+  Verified).
+- **Design:** `.specs/features/calibre-management/design.md` (P1, 8 modules) and
+  `.specs/features/calibre-management-p2/design.md` (P2, adds `EbookConvertRunner`,
+  `CalibreSmtpRunner`, `SmtpConfig`, reader/`calibredb_runner` extensions).
+- **Tasks:** `.specs/features/calibre-management/tasks.md` (P1) and
+  `.specs/features/calibre-management-p2/tasks.md` (P2). Stack: uv + pytest + ruff.
   Test-safety rule enforced via `scratch_library` fixture (writes never touch the real library).
