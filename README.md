@@ -1,8 +1,16 @@
 # calibre-mcp
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20server-8A2BE2.svg)](https://modelcontextprotocol.io/)
+
 A local **MCP server** (stdio) that lets an LLM host — Claude Desktop, Claude Code — manage your
 [Calibre](https://calibre-ebook.com/) ebook library. Reads are fast and safe (direct read-only
 SQLite); writes go through `calibredb` so Calibre's own integrity logic is always respected.
+
+> I built this to manage my own Calibre library straight from an LLM host — asking a chat to find,
+> tag, add, or clean up books instead of clicking around the GUI. It's a personal project, but if it's
+> useful to you too, **contributions are welcome** — see [Contributing](#contributing).
 
 ## Why the hybrid design
 
@@ -96,3 +104,28 @@ Write tests never touch a real library — they bootstrap a scratch Calibre libr
 MVP (P1): read + edit + add/remove, with the safety net above. Convert and organize/deduplicate
 (P2) are out of scope for this release. A library baseline profile exposed on connect (P3, STATS-01)
 is planned after P2 — see `.specs/STATE.md`.
+
+## Contributing
+
+Contributions are welcome — issues, bug reports, and pull requests all help. A few pointers:
+
+- The roadmap and design decisions live in [`.specs/STATE.md`](.specs/STATE.md) (see `AD-NNN`
+  decisions and the P2/P3 backlog). Skim it before proposing larger changes so we keep the
+  hybrid read/write model and safety invariants intact.
+- Keep the core invariants: **reads never write**, **writes go through `calibredb`** (never raw
+  SQL), logging to **stderr only**, and subprocess calls as **arg lists** (never shell strings).
+- Before opening a PR, run the checks locally:
+
+  ```bash
+  uv run ruff check src tests   # lint
+  uv run pytest                 # full suite (unit + integration + e2e)
+  ```
+
+- Write tests never touch a real library — they bootstrap a scratch Calibre library in a temp dir.
+  Please keep it that way.
+
+For anything non-trivial, open an issue first so we can align on approach.
+
+## License
+
+[MIT](LICENSE) © Gustavo Sousa.
