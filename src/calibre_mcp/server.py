@@ -1,0 +1,197 @@
+"""FastMCP tool surface — the 6 P1 tools (T10).
+
+FastMCP owns the stdio transport. Each ``@mcp.tool()`` narrows its inputs at the
+boundary, delegates to the ``CalibreLibrary`` facade (never ``sqlite3`` /
+``subprocess`` directly — the enforced invariant), shapes an LLM-friendly dict,
+and surfaces every failure as an explicit tool error — never a silent wrong or
+empty result (spec §Error Handling; design error-handling table).
+
+stdout hygiene (critical, design Risks): stdout is the stdio MCP framing channel.
+All logging goes to STDERR only and this module never prints to stdout.
+"""
+
+from __future__ import annotations
+
+import functools
+import logging
+import sys
+from collections.abc import Callable
+from dataclasses import asdict
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+
+from .config import load_config
+from .errors import CalibreMcpError
+from .library import CalibreLibrary
+from .sqlite_reader import Book
+
+# Logging to STDERR only — stdout is the stdio MCP channel and must stay clean.
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+logger = logging.getLogger("calibre_mcp")
+
+mcp = FastMCP("calibre")
+
+# Built lazily so config is read/validated at startup or on first tool call, and
+# so tests can point the server at a scratch library via the environment.
+_library: CalibreLibrary | None = None
+
+
+def _get_library() -> CalibreLibrary:
+    """Return the facade, building it from validated startup config (CFG-01).
+
+    A missing/invalid ``CALIBRE_LIBRARY_PATH`` raises ``ConfigError`` here, which
+    ``_map_errors`` turns into a clear tool error naming the offending path.
+    """
+    global _library
+    if _library is None:
+        _library = CalibreLibrary(load_config())
+    return _library
+
+
+def _map_errors(fn: Callable[..., dict]) -> Callable[..., dict]:
+    """Map every known failure to an explicit ``ToolError`` (design error table).
+
+    Guarantees a failure is never returned as a silent wrong/empty result: each
+    ``CalibreMcpError`` (config, not-found, invalid input, locked, calibredb,
+    confirmation) surfaces as a clear tool error the host/LLM can act on.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> dict:
+        try:
+            return fn(*args, **kwargs)
+        except CalibreMcpError as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
+
+
+def _book_to_dict(book: Book) -> dict:
+    """Shape a ``Book`` dataclass as a JSON-friendly dict for tool output."""
+    return asdict(book)
+
+
+def _jsonify(result: dict) -> dict:
+    """Convert any ``Book`` embedded in a facade mutation result to a dict."""
+    book = result.get("book")
+    if isinstance(book, Book):
+        return {**result, "book": _book_to_dict(book)}
+    return result
+
+
+@mcp.tool()
+@_map_errors
+def search_books(query: str) -> dict:
+    """Search the library with Calibre's own query grammar (SEARCH-01/03).
+
+    Resolves matching book ids via ``calibredb search "query"``, then hydrates
+    their full metadata from ``metadata.db``. An empty/blank query returns an
+    empty result set (not an error). Examples: ``author:asimov``, ``tag:scifi``,
+    ``series:Dune``, ``title:"Foundation"``.
+    """
+    books = _get_library().search_books(query)
+    return {"count": len(books), "books": [_book_to_dict(b) for b in books]}
+
+
+@mcp.tool()
+@_map_errors
+def list_books(limit: int | None = None, offset: int = 0, sort: str = "id") -> dict:
+    """List a page of books ordered by ``sort`` (SEARCH-02).
+
+    ``sort`` is one of: id, title, authors, pubdate, timestamp. ``limit``
+    defaults to and is capped at 50; use ``offset`` to page. Pure SQLite and
+    lock-independent, so this is the fallback when the Calibre GUI holds the
+    library lock.
+    """
+    books = _get_library().list_books(limit=limit, offset=offset, sort=sort)
+    return {
+        "count": len(books),
+        "offset": offset,
+        "books": [_book_to_dict(b) for b in books],
+    }
+
+
+@mcp.tool()
+@_map_errors
+def get_book(book_id: int) -> dict:
+    """Return one book's full metadata record (VIEW-01/02/03).
+
+    A non-integer id is rejected as invalid input before any DB access (VIEW-03);
+    an id that does not exist returns a clear "book not found" error naming the id
+    (VIEW-02) — never an empty or misleading record.
+    """
+    return _book_to_dict(_get_library().get_book(book_id))
+
+
+@mcp.tool()
+@_map_errors
+def update_metadata(
+    book_id: int,
+    fields: dict[str, Any],
+    confirmation_token: str | None = None,
+) -> dict:
+    """Edit a book's metadata via a two-step plan->confirm handshake (EDIT-01..07).
+
+    HOST: surface the returned plan (the per-field current->proposed diff) to the
+    USER and only re-call with ``confirmation_token`` after they approve.
+
+    Without a token: nothing is written; returns the diff plus a deterministic
+    ``confirmation_token`` for that exact change. With a matching token: backs up
+    ``metadata.db`` first, applies the fields via ``calibredb set_metadata``, then
+    returns the re-read record. A mismatched token is refused. Editable fields:
+    title, authors, tags, series, series_index, rating (0-10, i.e. 0-5 stars x2),
+    comments, publisher, pubdate, languages. A ``calibredb`` failure surfaces its
+    stderr and never reports success.
+    """
+    result = _get_library().update_metadata(
+        book_id, fields, token=confirmation_token
+    )
+    return _jsonify(result)
+
+
+@mcp.tool()
+@_map_errors
+def add_book(path: str) -> dict:
+    """Import an ebook file into the library by local filesystem path (ADD-01..04).
+
+    Validates the path is an existing file before any subprocess (ADD-02), backs
+    up ``metadata.db``, then imports via ``calibredb add`` and returns the new
+    book id plus its parsed metadata. A duplicate is surfaced honestly (never a
+    fake id); a ``calibredb`` failure surfaces its stderr.
+    """
+    return _jsonify(_get_library().add_book(path))
+
+
+@mcp.tool()
+@_map_errors
+def remove_book(book_id: int, confirmation_token: str | None = None) -> dict:
+    """Remove a book — RECOVERABLE — via a two-step review->confirm (REM-01..06).
+
+    Removal is RECOVERABLE: the book's files are copied to ``backups/trash/`` and
+    the book is sent to Calibre's recycle bin (never permanently deleted). It
+    still requires the two-step review->confirm.
+
+    HOST: surface the returned review (title/authors/formats + the recoverable
+    note) to the USER and only re-call with ``confirmation_token`` after they
+    approve.
+
+    Without a token: nothing is deleted; returns the book's details plus a
+    deterministic ``confirmation_token``. With a matching token: copies files to
+    trash, backs up ``metadata.db``, sends the book to the recycle bin, then
+    reports the trash location. A mismatched token or an unknown id is refused
+    with a clear error — never a false "removed".
+    """
+    return _jsonify(_get_library().remove_book(book_id, token=confirmation_token))
+
+
+def main() -> None:
+    """Entry point: validate config at startup (CFG-01), then serve over stdio."""
+    _get_library()  # fail fast with a clear ConfigError if the library path is bad
+    logger.info("calibre-mcp starting on stdio")
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

@@ -323,7 +323,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T10: FastMCP tool surface (all P1 tools, input validation, stdout hygiene)
+### T10: FastMCP tool surface (all P1 tools, input validation, stdout hygiene)  — **Status: ✅ Complete**
 
 **What**: `server.py` declaring the 6 `@mcp.tool()` functions, validating inputs, delegating to `CalibreLibrary`, mapping exceptions to explicit tool errors, logging to stderr only.
 **Where**: `src/calibre_mcp/server.py`, `tests/e2e/test_server.py`
