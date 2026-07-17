@@ -128,3 +128,11 @@ class CalibredbRunner:
     def remove(self, book_id: int) -> None:
         """Remove a book WITHOUT ``--permanent`` (recycle bin) (REM-02, AD-009)."""
         self._run(["remove", str(book_id)])
+
+    def add_format(self, book_id: int, path: Path) -> None:
+        """Attach ``path`` as a new format on ``book_id``, additive (CONV-01).
+
+        ``--dont-replace`` guarantees an existing format is never overwritten;
+        failure is classified by the existing ``_raise_for_error``.
+        """
+        self._run(["add_format", "--dont-replace", str(book_id), str(path)])

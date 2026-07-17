@@ -114,6 +114,31 @@ def test_remove_deletes_book_from_library(runner, scratch_library, tmp_path):
 
 
 @pytest.mark.integration
+def test_add_format_keeps_existing_and_adds_new(runner, scratch_library, tmp_path):
+    # CONV-01: add_format is additive — both old and new formats are present.
+    result = runner.add(_sample_epub(tmp_path))
+    pdf_path = tmp_path / "converted.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake pdf content")
+
+    runner.add_format(result.book_id, pdf_path)
+
+    book = SqliteReader(scratch_library / "metadata.db", scratch_library).get_book(
+        result.book_id
+    )
+    assert set(book.formats) == {"EPUB", "PDF"}
+
+
+@pytest.mark.integration
+def test_add_format_bad_id_raises_calibredb_error(runner, tmp_path):
+    # CONV-01: an unknown book id maps to CalibredbError, not a false success.
+    pdf_path = tmp_path / "converted.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake pdf content")
+
+    with pytest.raises(CalibredbError):
+        runner.add_format(999999, pdf_path)
+
+
+@pytest.mark.integration
 def test_remove_never_uses_permanent_flag(scratch_library):
     # REM-02/AD-009: removal must go to the recycle bin, never --permanent.
     captured: list[list[str]] = []
