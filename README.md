@@ -1,5 +1,6 @@
 # calibre-mcp
 
+[![CI](https://github.com/gustavofsousa/calibre-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/gustavofsousa/calibre-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -128,4 +129,4 @@ For anything non-trivial, open an issue first so we can align on approach.
 
 ## License
 
-[MIT](LICENSE) © Gustavo Sousa.
+[MIT](LICENSE) © Gustavo F Sousa.

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # calibredb powers the integration/e2e tests (they bootstrap scratch
+      # libraries). Without it those tests skip cleanly, but we install it so
+      # CI actually exercises the write path. Read tests against the maintainer's
+      # real library skip in CI by design.
+      - name: Install Calibre (provides calibredb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y calibre
+          calibredb --version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint (ruff)
+        run: uv run ruff check src tests
+
+      - name: Test (pytest)
+        run: uv run pytest
