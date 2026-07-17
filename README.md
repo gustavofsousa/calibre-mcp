@@ -5,29 +5,39 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-8A2BE2.svg)](https://modelcontextprotocol.io/)
 
-A local **MCP server** (stdio) that lets an LLM host — Claude Desktop, Claude Code — manage your
-[Calibre](https://calibre-ebook.com/) ebook library. Reads are fast and safe (direct read-only
-SQLite); writes go through `calibredb` so Calibre's own integrity logic is always respected.
+A local **MCP server** (stdio) that lets an LLM host — Claude Desktop, Claude Code, or any
+[MCP](https://modelcontextprotocol.io/)-compatible client — manage a
+[Calibre](https://calibre-ebook.com/) ebook library conversationally: search, edit metadata, add,
+convert, deduplicate, remove, and email books, all with human-in-the-loop safety.
 
-> I built this to manage my own Calibre library straight from an LLM host — asking a chat to find,
-> tag, add, or clean up books instead of clicking around the GUI. It's a personal project, but if it's
-> useful to you too, **contributions are welcome** — see [Contributing](#contributing).
+> I built this to stop clicking around the Calibre GUI and manage my library from a chat instead.
+> It's a personal project, and also a deliberate showcase of how I build backend/tooling systems:
+> hybrid I/O design, an explicit failure taxonomy, human-approval gates on every destructive
+> action, and a test suite that never touches real user data. See
+> [ARCHITECTURE.md](ARCHITECTURE.md) for the full design writeup.
 
 ## Why the hybrid design
 
-- **Reads** (`search`, `list`, `view`) query `metadata.db` directly, read-only — fast and can never
-  corrupt the library.
-- **Writes** (`edit`, `add`, `remove`) go through the `calibredb` CLI — never raw SQL — so Calibre
-  stays authoritative.
+- **Reads** (`search`, `list`, `view`, duplicate-finding) query `metadata.db` directly, read-only —
+  fast, and structurally incapable of corrupting the library (the SQLite connection is opened
+  `mode=ro`).
+- **Writes** (`edit`, `add`, `remove`, `convert`, `email`) go through Calibre's own CLI tools
+  (`calibredb`, `ebook-convert`, `calibre-smtp`) — never raw SQL — so Calibre stays authoritative
+  over its own database.
 - Every write is preceded by an **automatic `metadata.db` backup** (rolling, keeps the last 20).
 - **Removal is recoverable**: files are copied to a managed trash folder *and* the book is sent to
   Calibre's recycle bin — never a permanent delete.
-- **Edits and removals are two-step** (plan → confirm): the first call returns a human-readable
-  review plus a `confirmation_token`; nothing changes until you re-call with that exact token.
+- **Every mutating or outward-facing tool is two-step** (plan → confirm): the first call returns a
+  human-readable review plus a `confirmation_token`; nothing changes — and nothing is sent — until
+  you re-call with that exact token.
+
+Full rationale, module boundaries, and the decision log behind these choices live in
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Requirements
 
-- **Calibre** installed, with `calibredb` on your `PATH` (`calibredb --version`).
+- **Calibre** installed, with `calibredb` and `ebook-convert` on your `PATH`
+  (`calibredb --version`). `calibre-smtp` is also required if you want `email_book`.
 - **Python ≥ 3.12** and [`uv`](https://docs.astral.sh/uv/).
 
 ## Install
@@ -49,6 +59,18 @@ The server manages **one** library, set via environment variable:
 
 The server **fails fast** at startup with a clear error if `CALIBRE_LIBRARY_PATH` is unset or the
 directory has no `metadata.db`.
+
+`email_book` additionally needs SMTP relay credentials (loaded lazily — the server boots fine
+without them, and only `email_book` fails if they're missing):
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `CALIBRE_MCP_SMTP_RELAY` | for email | — | SMTP relay host. |
+| `CALIBRE_MCP_SMTP_USERNAME` | for email | — | SMTP username. |
+| `CALIBRE_MCP_SMTP_PASSWORD` | for email | — | SMTP password. Never logged, never returned in any tool output. |
+| `CALIBRE_MCP_SMTP_FROM` | for email | — | Sender address. |
+| `CALIBRE_MCP_SMTP_PORT` | no | `465` (SSL) / `25` (TLS/none) | SMTP port. |
+| `CALIBRE_MCP_SMTP_ENCRYPTION` | no | `TLS` | One of `SSL`, `TLS`, `NONE`. |
 
 ### Claude Desktop / Claude Code
 
@@ -76,19 +98,26 @@ CALIBRE_LIBRARY_PATH="/path/to/Calibre Library" uv run calibre-mcp
 CALIBRE_LIBRARY_PATH="/path/to/Calibre Library" uv run python -m calibre_mcp
 ```
 
-The server communicates over stdio (JSON-RPC); it prints nothing to stdout except MCP framing — all
-logs go to stderr.
+The server communicates over stdio (JSON-RPC); it prints nothing to stdout except MCP framing —
+all logs go to stderr, on purpose (see [ARCHITECTURE.md](ARCHITECTURE.md#stdout-hygiene)).
 
 ## Tools
 
-| Tool | What it does |
-| --- | --- |
-| `search_books` | Resolve a Calibre search query to full book metadata. Empty query → empty list. |
-| `list_books` | Paginated, sortable listing (lock-independent — works even when the Calibre GUI holds a write lock). |
-| `get_book` | Full metadata for one book id. |
-| `update_metadata` | Two-step edit of a whitelisted field set (title, authors, tags, series, rating, …). |
-| `add_book` | Add a book from a local file path (returns the new id + metadata). |
-| `remove_book` | Two-step, **recoverable** removal (trash copy + recycle bin). |
+| Tool | What it does | Gate |
+| --- | --- | --- |
+| `search_books` | Resolve a Calibre search query (`author:asimov`, `tag:scifi`, …) to full book metadata. | read-only |
+| `list_books` | Paginated, sortable listing — works even when the Calibre GUI holds a write lock. | read-only |
+| `get_book` | Full metadata for one book id. | read-only |
+| `find_duplicates` | Advisory report of likely-duplicate books by normalized (title, author). Never merges. | read-only |
+| `update_metadata` | Edit a whitelisted field set (title, authors, tags, series, rating, comments, …). | plan → confirm |
+| `add_book` | Add a book from a local file path; surfaces duplicates honestly. | single-step (backed up) |
+| `convert_book` | Convert to a new format (`epub`, `azw3`, `mobi`, `pdf`) — additive, keeps the original(s). | single-step (backed up) |
+| `remove_book` | **Recoverable** removal: trash copy + Calibre recycle bin, never a hard delete. | plan → confirm |
+| `email_book` | Email a book's file via `calibre-smtp`, picking the best format automatically. | plan → confirm |
+
+Every tool's full contract (edge cases, error conditions, exact field whitelist) is documented in
+its docstring in [`server.py`](src/calibre_mcp/server.py) — those docstrings are what the LLM host
+sees, so they double as the API reference.
 
 ## Development
 
@@ -98,34 +127,36 @@ uv run pytest                 # full suite (unit + integration + e2e)
 uv run pytest -m unit         # fast unit tests only
 ```
 
-Write tests never touch a real library — they bootstrap a scratch Calibre library in a temp dir.
+137 tests across three tiers (`unit`, `integration`, `e2e`); write tests never touch a real
+library — see [ARCHITECTURE.md](ARCHITECTURE.md#testing-strategy).
 
-## Scope
+## Project layout
 
-MVP (P1): read + edit + add/remove, with the safety net above. Convert and organize/deduplicate
-(P2) are out of scope for this release. A library baseline profile exposed on connect (P3, STATS-01)
-is planned after P2 — see `.specs/STATE.md`.
+```
+src/calibre_mcp/
+├── server.py               # FastMCP tool surface — the only stdio/MCP-aware module
+├── library.py               # CalibreLibrary facade — orchestrates every tool's business logic
+├── sqlite_reader.py         # Read-only metadata.db access (the only sqlite3 call site)
+├── calibredb_runner.py      # calibredb subprocess wrapper (search/edit/add/remove/add_format)
+├── ebook_convert_runner.py  # ebook-convert subprocess wrapper
+├── calibre_smtp_runner.py   # calibre-smtp subprocess wrapper
+├── backup.py                 # metadata.db snapshots + recoverable trash
+├── confirmation.py           # plan→confirm token derivation/verification
+├── config.py                  # env-driven startup config, fail-fast validation
+└── errors.py                  # the failure taxonomy every layer maps to
+```
+
+## Roadmap
+
+Shipped: full read/curate/distribute loop (search, list, view, edit, add, remove, convert,
+dedupe, email). What's next — library self-knowledge, bulk operations, cover/metadata enrichment,
+device sync — is tracked in [`.specs/ROADMAP.md`](.specs/ROADMAP.md), including the reasoning for
+sequencing and what's explicitly out of scope.
 
 ## Contributing
 
-Contributions are welcome — issues, bug reports, and pull requests all help. A few pointers:
-
-- The roadmap and design decisions live in [`.specs/STATE.md`](.specs/STATE.md) (see `AD-NNN`
-  decisions and the P2/P3 backlog). Skim it before proposing larger changes so we keep the
-  hybrid read/write model and safety invariants intact.
-- Keep the core invariants: **reads never write**, **writes go through `calibredb`** (never raw
-  SQL), logging to **stderr only**, and subprocess calls as **arg lists** (never shell strings).
-- Before opening a PR, run the checks locally:
-
-  ```bash
-  uv run ruff check src tests   # lint
-  uv run pytest                 # full suite (unit + integration + e2e)
-  ```
-
-- Write tests never touch a real library — they bootstrap a scratch Calibre library in a temp dir.
-  Please keep it that way.
-
-For anything non-trivial, open an issue first so we can align on approach.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev workflow, the invariants a PR must preserve,
+and how the spec-driven process behind this repo works.
 
 ## License
 
