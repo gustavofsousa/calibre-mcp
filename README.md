@@ -94,4 +94,5 @@ Write tests never touch a real library — they bootstrap a scratch Calibre libr
 ## Scope
 
 MVP (P1): read + edit + add/remove, with the safety net above. Convert and organize/deduplicate
-(P2) are out of scope for this release.
+(P2) are out of scope for this release. A library baseline profile exposed on connect (P3, STATS-01)
+is planned after P2 — see `.specs/STATE.md`.

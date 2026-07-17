@@ -45,6 +45,30 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   writes via `CalibredbRunner`, both behind the `CalibreLibrary` facade. Logging to **stderr only**
   (stdout is the stdio MCP channel). Subprocess always arg-list, `shell=False`.
 
+## Backlog — deferred (post-P2)
+
+- **STATS-01 — Library baseline profile exposed by the server (P3, after P2).** Surface aggregate
+  library knowledge — totals, format/language breakdown, metadata completeness, identifier-type mix,
+  author/tag distribution, and data-quality flags (Unknown-author count, `0101-01-01` placeholder
+  pubdates, unused `series`/`rating`, duplicate-title groups) — so the host knows the library's shape
+  on connect **without** paging `list_books` (slow, context-heavy, and it even hid the id 61–114 range
+  when we first classified the library).
+  - **Motivation / prototype:** validated ad-hoc by reading `metadata.db` read-only and caching the
+    result at `.library-profile.json` (gitignored, personal data — never committed). That file is the
+    reference schema for what STATS-01 should compute. The direct-DB read caught a real duplicate
+    ("A fé explicada", ids 68 & 132) that the paginated listing missed.
+  - **Open design decision (resolve when picked up):**
+    - *Option A — MCP resource* (`resources/list` + `resources/read`, e.g. `calibre://library/stats`):
+      host can auto-load on connect; fits "known without a tool call". Freshness: compute on read, or
+      cache with a generated-at stamp + cheap invalidation.
+    - *Option B — `library_stats` read tool*: recomputed on demand from `metadata.db`; simpler, always
+      fresh, but the host must choose to call it (not auto-known).
+    - *Recommendation:* **A** for the auto-known-on-connect goal, computed on read (metadata.db is
+      small; the SQLite reader is already read-only and lock-independent). Reuse `SqliteReader` behind
+      the `CalibreLibrary` facade per the existing invariant — no new SQL in the tool/resource layer.
+  - **Scope guard:** read-only, additive, no write path; must not violate the stderr-only / arg-list
+    invariants. Deferred until P2 (CONV-01, ORG-01) ships and traction warrants.
+
 ## Environment
 
 - Calibre 8.2.100 installed: `calibredb`, `ebook-convert` on PATH. Python 3.12.3.
@@ -59,7 +83,7 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   a live `list_books` call reads the real library. Packaging finished: `calibre-mcp` console script
   (`[project.scripts]`) + `python -m calibre_mcp` entry point; README with Claude Desktop/Code setup.
 - **Next step:** P2 backlog when traction warrants — CONV-01 (convert) and ORG-01
-  (organize/deduplicate). Not started.
+  (organize/deduplicate). Not started. Then P3: STATS-01 (library baseline profile, see Backlog).
 - **Spec:** `.specs/features/calibre-management/spec.md` (31 requirements, 29 P1 / 2 P2).
 - **Design:** `.specs/features/calibre-management/design.md` (8 modules: config, errors,
   sqlite_reader, calibredb_runner, backup, confirmation, library, server).
