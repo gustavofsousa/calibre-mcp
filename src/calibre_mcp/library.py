@@ -18,6 +18,11 @@ from .confirmation import plan_token, verify
 from .errors import InvalidInputError
 from .sqlite_reader import Book, SqliteReader
 
+# CONV-01: formats convert_book accepts as a target, and the device-preference
+# order email_book uses to pick an attachment when none is specified.
+SUPPORTED_CONVERT_FORMATS = ("epub", "azw3", "mobi", "pdf")
+EMAIL_FORMAT_PREFERENCE = ("EPUB", "AZW3", "MOBI", "PDF")
+
 # SEARCH-02 edge case: when ``limit`` is absent or huge, apply a sane cap so a
 # single call never tries to page the whole library. This value is both the
 # default and the ceiling; ``offset`` is exposed for paging past it.
@@ -45,6 +50,7 @@ _RATING_MAX = 10
 # reviewed op (AD-012). Must stay stable between the plan and apply calls.
 _OP_UPDATE = "update_metadata"
 _OP_REMOVE = "remove_book"
+_OP_EMAIL = "email_book"
 
 
 class CalibreLibrary:
@@ -89,6 +95,19 @@ class CalibreLibrary:
         """Return one book's full record; propagates ``BookNotFoundError``
         (VIEW-01/02) and ``InvalidInputError`` for a non-int id (VIEW-03)."""
         return self._reader.get_book(book_id)
+
+    def find_duplicates(self) -> dict:
+        """Return groups of likely-duplicate books, advisory only (ORG-01).
+
+        Pure read (no subprocess, lock-independent); never mutates and never
+        auto-merges — the host/user decides what, if anything, to do about a
+        reported group.
+        """
+        groups = self._reader.find_duplicate_groups()
+        return {
+            "group_count": len(groups),
+            "groups": [self._shape_duplicate_group(group) for group in groups],
+        }
 
     # -- mutations (plan -> confirm, backup-before-write) ------------------
 
@@ -231,6 +250,23 @@ class CalibreLibrary:
                     f"rating must be an integer in {_RATING_MIN}-{_RATING_MAX} "
                     f"(0-5 stars x2), got {rating!r}"
                 )
+
+    @staticmethod
+    def _shape_duplicate_group(group: list[Book]) -> dict:
+        """Shape one duplicate group for output (ORG-01)."""
+        primary_author = group[0].authors[0] if group[0].authors else ""
+        return {
+            "key": {"title": group[0].title, "author": primary_author},
+            "books": [
+                {
+                    "id": book.id,
+                    "title": book.title,
+                    "authors": book.authors,
+                    "formats": book.formats,
+                }
+                for book in group
+            ],
+        }
 
     @staticmethod
     def _build_diff(book: Book, fields: dict) -> dict:
