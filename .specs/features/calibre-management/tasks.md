@@ -142,7 +142,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T3: Startup config & validation (CFG-01)
+### T3: Startup config & validation (CFG-01)  — **Status: ✅ Complete**
 
 **What**: `load_config()` resolving/validating `CALIBRE_LIBRARY_PATH` and the backup root.
 **Where**: `src/calibre_mcp/config.py`, `tests/unit/test_config.py`

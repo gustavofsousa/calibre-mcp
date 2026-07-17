@@ -234,7 +234,7 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 | SEARCH-01      | P1: Search & browse       | Design | Pending |
 | SEARCH-02      | P1: Search & browse       | Design | Pending |
 | SEARCH-03      | P1: Search & browse       | Design | Pending |
-| CFG-01         | P1: Search & browse       | Design | Pending |
+| CFG-01         | P1: Search & browse       | Tasks  | Implementing |
 | VIEW-01        | P1: View metadata         | Design | Pending |
 | VIEW-02        | P1: View metadata         | Design | Pending |
 | VIEW-03        | P1: View metadata         | Design | Pending |
@@ -259,7 +259,7 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 | SAFE-02        | P1: Data-safety net       | Design | Pending |
 | SAFE-03        | P1: Data-safety net       | Design | Pending |
 | SAFE-04        | P1: Data-safety net       | Design | Pending |
-| SAFE-05        | P1: Data-safety net       | Design | Pending |
+| SAFE-05        | P1: Data-safety net       | Tasks  | Implementing |
 | CONV-01        | P2: Convert formats       | -      | Pending |
 | ORG-01         | P2: Organize & dedup      | -      | Pending |
 | EMAIL-01       | P2: Email a book's file(s)| -      | Pending |
