@@ -255,10 +255,10 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 | REM-04         | P1: Remove a book         | Design | Pending |
 | REM-05         | P1: Remove a book         | Design | Pending |
 | REM-06         | P1: Remove a book         | Design | Pending |
-| SAFE-01        | P1: Data-safety net       | Design | Pending |
-| SAFE-02        | P1: Data-safety net       | Design | Pending |
-| SAFE-03        | P1: Data-safety net       | Design | Pending |
-| SAFE-04        | P1: Data-safety net       | Design | Pending |
+| SAFE-01        | P1: Data-safety net       | Tasks  | Implementing |
+| SAFE-02        | P1: Data-safety net       | Tasks  | Implementing |
+| SAFE-03        | P1: Data-safety net       | Tasks  | Implementing |
+| SAFE-04        | P1: Data-safety net       | Tasks  | Implementing |
 | SAFE-05        | P1: Data-safety net       | Tasks  | Implementing |
 | CONV-01        | P2: Convert formats       | -      | Pending |
 | ORG-01         | P2: Organize & dedup      | -      | Pending |

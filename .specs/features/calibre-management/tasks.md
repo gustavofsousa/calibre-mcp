@@ -194,7 +194,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T5: Backup & trash safety net [P] (SAFE-01..05, supports REM)
+### T5: Backup & trash safety net [P] (SAFE-01..05, supports REM)  — **Status: ✅ Complete**
 
 **What**: `backup_metadata_db()` (copy + rolling retention + abort-if-unwritable) and `trash_book_files()`.
 **Where**: `src/calibre_mcp/backup.py`, `tests/unit/test_backup.py`
