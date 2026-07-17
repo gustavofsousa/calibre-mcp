@@ -220,7 +220,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T6: Plan→confirm intent gate [P] (EDIT-01/03, REM-01/05)
+### T6: Plan→confirm intent gate [P] (EDIT-01/03, REM-01/05)  — **Status: ✅ Complete**
 
 **What**: Deterministic `plan_token` + `verify` handshake.
 **Where**: `src/calibre_mcp/confirmation.py`, `tests/unit/test_confirmation.py`
