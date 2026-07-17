@@ -141,9 +141,9 @@ All mutations applied via direct edit → targeted test run → `git checkout --
 
 | Requirement | Previous Status | New Status |
 | ----------- | ---------------- | ---------- |
-| CONV-01     | Planned           | ⚠️ Needs Fix (AD-011 ordering gap, Fix 1) |
+| CONV-01     | Planned           | ✅ Verified (iteration 2 — see Re-verification below) |
 | ORG-01      | Planned           | ✅ Verified |
-| EMAIL-01    | Planned           | ⚠️ Needs Fix (AC-3 explicit-format coverage gap, Fix 2) |
+| EMAIL-01    | Planned           | ✅ Verified (iteration 2 — see Re-verification below) |
 
 ---
 
@@ -163,3 +163,21 @@ All mutations applied via direct edit → targeted test run → `git checkout --
 3. Stdout-clean assertion doesn't cover the 3 new tools despite Task T10 calling for it — see Fix 3.
 
 **Next steps**: Route Fix 1 and Fix 2 back to an implementer as fix tasks (Fix 3 can be bundled in); re-verify after the fix commits land. This is iteration 1 of the fix→re-verify loop (max 3 before escalation).
+
+---
+
+## Re-verification (iteration 2)
+
+**Fix commit reviewed**: `c3ba07a` — "test(p2): close Verifier gaps — backup ordering, explicit-format email, stdout hygiene"
+
+**Gap 1 (CONV-01 AD-011 ordering, Major)** — ✅ Closed. `tests/integration/test_library_p2.py::test_convert_book_backs_up_before_add_format_not_after` spies on `library_module.backup_metadata_db` and `facade._runner.add_format`, recording call order, and asserts `calls == ["backup", "add_format"]`. Re-ran the original discriminating mutation independently: manually swapped the `backup_metadata_db(...)` / `self._runner.add_format(...)` call order in `src/calibre_mcp/library.py:144-151`, ran the new test — it **failed** as expected (`AssertionError: assert ['add_format', 'backup'] == ['backup', 'add_format']`), confirming the test kills the mutant. Reverted with `git checkout -- src/calibre_mcp/library.py`; `git status --short` confirmed clean afterward.
+
+**Gap 2 (EMAIL-01 AC-3 explicit-format success, Minor)** — ✅ Closed. `tests/integration/test_library_p2.py::test_email_book_explicit_format_picks_that_file_not_the_default` converts a seeded book to PDF (so it holds both EPUB and PDF), then calls `email_book(book_id, "bob@example.com", format="pdf")` and asserts `plan["format"] == "PDF"` and `plan["file"]` resolves to the PDF path — not the EPUB default. This is a genuine explicit-format-success assertion, distinct from the pre-existing default-preference and explicit-format-failure tests.
+
+**Gap 3 (T10 stdout hygiene, Minor)** — ✅ Closed. `tests/e2e/test_server.py::test_stdout_stays_clean_across_p2_tool_calls` wraps calls to `find_duplicates`, `convert_book`, and `email_book` (plan step) in `contextlib.redirect_stdout` and asserts the buffer stays empty.
+
+**Full gate re-run** (repo root):
+- `uv run ruff check src tests` → all checks passed, exit 0
+- `uv run pytest` → **137 passed, 0 failed, 0 skipped** (172.65s) — up from 134 in iteration 1 (+3 new tests: ordering spy, explicit-format-success, stdout hygiene)
+
+**Verdict**: PASS. All 3 gaps from iteration 1 are genuinely closed, not just papered over — gap 1 was independently re-verified by reproducing the mutation and confirming the new test kills it. `calibre-management-p2` is done.
