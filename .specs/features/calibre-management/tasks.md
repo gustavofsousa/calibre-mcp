@@ -244,7 +244,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T7: calibredb runner (write + search) [P] (SEARCH-01, EDIT-02/05, ADD, REM-02)
+### T7: calibredb runner (write + search) [P] (SEARCH-01, EDIT-02/05, ADD, REM-02)  — **Status: ✅ Complete**
 
 **What**: The single subprocess call site: `search`, `set_metadata`, `add`, `remove`, plus `_run` failure classification.
 **Where**: `src/calibre_mcp/calibredb_runner.py`, `tests/integration/test_calibredb_runner.py`

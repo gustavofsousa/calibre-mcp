@@ -239,18 +239,18 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 | VIEW-02        | P1: View metadata         | Tasks  | Implementing |
 | VIEW-03        | P1: View metadata         | Tasks  | Implementing |
 | EDIT-01        | P1: Edit metadata         | Design | Pending |
-| EDIT-02        | P1: Edit metadata         | Design | Pending |
+| EDIT-02        | P1: Edit metadata         | Tasks  | Implementing |
 | EDIT-03        | P1: Edit metadata         | Design | Pending |
 | EDIT-04        | P1: Edit metadata         | Design | Pending |
 | EDIT-05        | P1: Edit metadata         | Design | Pending |
 | EDIT-06        | P1: Edit metadata         | Design | Pending |
 | EDIT-07        | P1: Edit metadata         | Design | Pending |
-| ADD-01         | P1: Add a book            | Design | Pending |
+| ADD-01         | P1: Add a book            | Tasks  | Implementing |
 | ADD-02         | P1: Add a book            | Design | Pending |
-| ADD-03         | P1: Add a book            | Design | Pending |
-| ADD-04         | P1: Add a book            | Design | Pending |
+| ADD-03         | P1: Add a book            | Tasks  | Implementing |
+| ADD-04         | P1: Add a book            | Tasks  | Implementing |
 | REM-01         | P1: Remove a book         | Design | Pending |
-| REM-02         | P1: Remove a book         | Design | Pending |
+| REM-02         | P1: Remove a book         | Tasks  | Implementing |
 | REM-03         | P1: Remove a book         | Design | Pending |
 | REM-04         | P1: Remove a book         | Design | Pending |
 | REM-05         | P1: Remove a book         | Design | Pending |
