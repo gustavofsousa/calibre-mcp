@@ -227,3 +227,13 @@ lock-independent fallback. Recorded in Risks.
 - **Reads** — run against a **copy** of the real library (or the real one read-only) to assert real joins.
 - **Writes** — create a **scratch library** in a temp dir (`calibredb add --with-library /tmp/...` on an empty dir bootstraps it) so `add`/`edit`/`remove` never touch the user's real library. This is the safety rule for the whole write test suite.
 - Each AC maps to at least one test asserting the spec-defined outcome (not implementation shape).
+
+---
+
+## P2 and beyond
+
+P2 (CONV-01 convert, ORG-01 organize/deduplicate, EMAIL-01 email) is designed as a **separate
+feature**: `.specs/features/calibre-management-p2/` (spec + design + tasks). It reuses this
+feature's facade, runners, reader, backup, and confirmation, and conforms to the same invariants.
+Project decisions AD-013…AD-017 (in `.specs/STATE.md`) govern it.
+

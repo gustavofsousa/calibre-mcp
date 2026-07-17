@@ -9,8 +9,8 @@ Implement these tasks with the `spec-driven` skill: **activate it by name and fo
 ---
 
 **Design**: `.specs/features/calibre-management/design.md`
-**Status**: Draft (awaiting approval)
-**Scope**: P1 only (29 requirements). P2 (CONV-01, ORG-01) not in this breakdown.
+**Status**: Done (T1–T10 ✅ — all 29 P1 requirements shipped).
+**Scope**: P1 only (29 requirements). P2 (CONV-01, ORG-01, EMAIL-01) is a **separate feature**: `.specs/features/calibre-management-p2/`.
 
 ---
 
@@ -437,3 +437,12 @@ All ✅ — no violations.
 | ADD-01..04 | T7, T9, T10 |
 | REM-01..06 | T5, T6, T7, T9, T10 |
 | SAFE-01..05 | T3 (SAFE-05), T5, T9 |
+
+---
+
+## P2 (separate feature)
+
+P2 — CONV-01 (convert), ORG-01 (organize/deduplicate), EMAIL-01 (email) — is broken down in its
+own feature: `.specs/features/calibre-management-p2/tasks.md` (10 tasks, 4 phases). It extends this
+feature's code (facade, runners, reader) without changing P1 behavior.
+

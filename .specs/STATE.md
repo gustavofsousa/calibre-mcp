@@ -18,8 +18,8 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 - **AD-006 — Intelligence lives in the host, not the server.** No embedded AI/LLM calls. The MCP
   exposes clean tools; Claude orchestrates.
 - **AD-007 — One server instance = one library**, path via `CALIBRE_LIBRARY_PATH` env var.
-- **AD-008 — Traction mode: MVP.** Cut anything off the core curation loop. P1 = read + edit +
-  add/remove. P2 = convert + organize/deduplicate.
+- **AD-008 (REVISED by AD-013) — Traction mode: MVP.** Cut anything off the core curation loop.
+  P1 = read + edit + add/remove. ~~P2 = convert + organize/deduplicate.~~ P2 scope revised — see AD-013.
 - **AD-009 (REVISED) — `remove` is recoverable, never `--permanent`.** `calibredb remove` sends to the
   recycle bin AND, before removing, the book's actual files are copied to a managed `backups/trash/`
   folder. Double safety net: even if the recycle bin is emptied, the files survive. Supersedes the
@@ -44,6 +44,30 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 - **Invariant — tool layer never touches `sqlite3`/`subprocess` directly.** Reads via `SqliteReader`,
   writes via `CalibredbRunner`, both behind the `CalibreLibrary` facade. Logging to **stderr only**
   (stdout is the stdio MCP channel). Subprocess always arg-list, `shell=False`.
+
+- **AD-013 — P2 scope = CONV-01 + ORG-01 + EMAIL-01.** Supersedes AD-008's "P2 = convert +
+  organize/deduplicate": EMAIL-01 (email a book's file) joins P2. Rationale: `calibre-smtp` is
+  present and email is a natural distribution increment on the P1 read primitives. STATS-01 stays P3.
+- **AD-014 — One sibling runner per external CLI.** `ebook-convert` → `EbookConvertRunner`,
+  `calibre-smtp` → `CalibreSmtpRunner`, each mirroring `CalibredbRunner`'s single-call-site discipline
+  (arg-list, `shell=False`, failure→taxonomy). `CalibredbRunner` stays calibredb-only. The tool layer
+  still never touches `subprocess`/`sqlite3` directly (extends AD-001/AD-005). `add_format` is a
+  calibredb subcommand → it lives on `CalibredbRunner`.
+- **AD-015 — SMTP config via env, password hygiene.** `calibre-smtp` cannot read Calibre's GUI SMTP
+  config, so relay/user/password/encryption/sender come from `CALIBRE_MCP_SMTP_*` env vars (follows
+  AD-007), lazy-loaded inside `email_book` (server boots without SMTP). The password is **env-only**:
+  never logged, never returned in any tool output/plan, and scrubbed from any echoed subprocess
+  stderr. Known accepted limitation: the CLI exposes the password in the process arg list (`ps`);
+  acceptable for a local single-user MVP, revisit with an `--outbox`/stdin path later.
+- **AD-016 — Per-tool intent gates in P2.** `convert_book` is single-step + backup (additive like
+  `add_book`; refuses when the target format already exists instead of a confirm gate).
+  `find_duplicates` is a read-only advisory report (never auto-merges). `email_book` uses the
+  plan→confirm gate (AD-012) because sending is outward-facing — data must be reviewed before it
+  leaves the machine.
+- **AD-017 — Format file-path resolution lives in `SqliteReader`.** `format_files(book_id)` resolves
+  each format's on-disk path (`{library}/{books.path}/{data.name}.{ext}`), reused by convert (source)
+  and email (attachment). Reads stay in the read layer (AD-001); `SqliteReader` gains the library root
+  in its constructor.
 
 ## Backlog — deferred (post-P2)
 
@@ -82,8 +106,17 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   demonstrated: server boots over stdio, MCP `initialize` + `tools/list` returns all 6 tools, and
   a live `list_books` call reads the real library. Packaging finished: `calibre-mcp` console script
   (`[project.scripts]`) + `python -m calibre_mcp` entry point; README with Claude Desktop/Code setup.
-- **Next step:** P2 backlog when traction warrants — CONV-01 (convert) and ORG-01
-  (organize/deduplicate). Not started. Then P3: STATS-01 (library baseline profile, see Backlog).
+- **Next step:** P2 Execute IN PROGRESS (2026-07-17) — `.specs/features/calibre-management-p2/`.
+  Phase 1 (T1 errors, T2 SMTP config) and Phase 2 (T3 reader format_files/find_duplicate_groups,
+  T4 EbookConvertRunner, T5 CalibreSmtpRunner, T6 calibredb add_format) are **done**, each its own
+  atomic commit, executed inline (user declined per-phase sub-agents). Full gate green after every
+  task: `ruff check` clean + `pytest` 111 passed (up from 88 at P1). `SqliteReader` constructor now
+  takes `(db_path, library_path)` — `CalibreLibrary` and existing tests updated to match.
+  **Remaining:** Phase 3 (T7 facade `find_duplicates`, T8 facade `convert_book`, T9 facade
+  `email_book` — sequential, same file `library.py`) and Phase 4 (T10 FastMCP tool surface). The
+  feature-level Verifier has NOT run yet — it only runs after T10 (the last task). Do not report P2
+  as done until T7–T10 are implemented and the Verifier returns PASS.
+  Env verified: `ebook-convert` + `calibre-smtp` on PATH (Calibre 8.2.100).
 - **Spec:** `.specs/features/calibre-management/spec.md` (31 requirements, 29 P1 / 2 P2).
 - **Design:** `.specs/features/calibre-management/design.md` (8 modules: config, errors,
   sqlite_reader, calibredb_runner, backup, confirmation, library, server).

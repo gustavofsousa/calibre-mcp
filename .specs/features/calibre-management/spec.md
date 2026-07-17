@@ -207,12 +207,12 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 
 1. WHEN `email_book` is called with a book id and a recipient address THEN the system SHALL send the book's file as an attachment via Calibre's email mechanism.
 
-**Open questions for P2 design** (do not resolve now):
-- Delivery mechanism: Calibre ships `calibre-smtp` (CLI) and the GUI reads its own SMTP config — decide whether to
-  shell out to `calibre-smtp`, reuse Calibre's stored SMTP settings, or take SMTP config via env. `calibredb` itself
-  does not send email.
-- Which format to attach when a book has several (epub/mobi/pdf), and how to pick.
-- Recipient allow-list / confirmation step (sending is an outward-facing action — likely wants a plan→confirm gate like edits/removes).
+**Open questions for P2 design** — RESOLVED. P2 is now a **separate feature** with its own spec/design/tasks:
+`.specs/features/calibre-management-p2/`. Summary of the resolutions (full detail there + AD-015/AD-016):
+- Delivery mechanism → shell out to `calibre-smtp` (compose mode); relay credentials from `CALIBRE_MCP_SMTP_*` env
+  (lazy). Password env-only, never logged/returned (AD-015).
+- Which format to attach → explicit `format` arg, else device-preference order `epub → azw3 → mobi → pdf`.
+- Confirmation step → `email_book` uses the plan→confirm gate (AD-012), since sending is outward-facing (AD-016).
 
 ---
 
@@ -260,9 +260,9 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 | SAFE-03        | P1: Data-safety net       | Tasks  | Implementing |
 | SAFE-04        | P1: Data-safety net       | Tasks  | Implementing |
 | SAFE-05        | P1: Data-safety net       | Tasks  | Implementing |
-| CONV-01        | P2: Convert formats       | -      | Pending |
-| ORG-01         | P2: Organize & dedup      | -      | Pending |
-| EMAIL-01       | P2: Email a book's file(s)| -      | Pending |
+| CONV-01        | P2: Convert formats       | → p2 feature | Moved (see calibre-management-p2) |
+| ORG-01         | P2: Organize & dedup      | → p2 feature | Moved (see calibre-management-p2) |
+| EMAIL-01       | P2: Email a book's file(s)| → p2 feature | Moved (see calibre-management-p2) |
 
 **ID format:** `[CATEGORY]-[NUMBER]`
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
