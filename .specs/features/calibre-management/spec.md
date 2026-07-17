@@ -231,13 +231,13 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 
 | Requirement ID | Story                     | Phase  | Status  |
 | -------------- | ------------------------- | ------ | ------- |
-| SEARCH-01      | P1: Search & browse       | Design | Pending |
-| SEARCH-02      | P1: Search & browse       | Design | Pending |
+| SEARCH-01      | P1: Search & browse       | Tasks  | Implementing |
+| SEARCH-02      | P1: Search & browse       | Tasks  | Implementing |
 | SEARCH-03      | P1: Search & browse       | Design | Pending |
 | CFG-01         | P1: Search & browse       | Tasks  | Implementing |
-| VIEW-01        | P1: View metadata         | Design | Pending |
-| VIEW-02        | P1: View metadata         | Design | Pending |
-| VIEW-03        | P1: View metadata         | Design | Pending |
+| VIEW-01        | P1: View metadata         | Tasks  | Implementing |
+| VIEW-02        | P1: View metadata         | Tasks  | Implementing |
+| VIEW-03        | P1: View metadata         | Tasks  | Implementing |
 | EDIT-01        | P1: Edit metadata         | Design | Pending |
 | EDIT-02        | P1: Edit metadata         | Design | Pending |
 | EDIT-03        | P1: Edit metadata         | Design | Pending |

@@ -167,7 +167,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T4: SQLite read layer [P] (VIEW-01/02/03, SEARCH-02, SEARCH-01 hydrate)
+### T4: SQLite read layer [P] (VIEW-01/02/03, SEARCH-02, SEARCH-01 hydrate)  — **Status: ✅ Complete**
 
 **What**: Read-only `metadata.db` access: `get_book`, `hydrate`, `list_books`, returning `Book` dataclasses.
 **Where**: `src/calibre_mcp/sqlite_reader.py`, `tests/integration/test_sqlite_reader.py`
