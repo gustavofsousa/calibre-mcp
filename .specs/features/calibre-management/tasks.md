@@ -94,7 +94,7 @@ T8,T9 ──→ T10
 
 ## Task Breakdown
 
-### T1: Project scaffold + test harness
+### T1: Project scaffold + test harness  — **Status: ✅ Complete**
 
 **What**: `src/` layout Python package with `pyproject.toml` (uv, pytest, ruff), pytest markers (`unit`/`integration`/`e2e`), and shared fixtures: a read-only handle to the real library and a `scratch_library` fixture that bootstraps an empty Calibre library in `tmp_path`.
 **Where**: `pyproject.toml`, `src/calibre_mcp/__init__.py`, `tests/conftest.py`
