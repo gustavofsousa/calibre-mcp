@@ -61,3 +61,50 @@ class CalibredbNotFoundError(CalibreMcpError):
 
 class ConfirmationError(CalibreMcpError):
     """The supplied confirmation token does not match the requested change."""
+
+
+class EbookConvertError(CalibreMcpError):
+    """ebook-convert exited non-zero; carries the command, exit code, and stderr."""
+
+    def __init__(self, cmd: list[str], exit_code: int, stderr: str) -> None:
+        self.cmd = cmd
+        self.exit_code = exit_code
+        self.stderr = stderr
+        super().__init__(f"ebook-convert failed (exit {exit_code}): {stderr.strip()}")
+
+
+class EbookConvertNotFoundError(CalibreMcpError):
+    """The ebook-convert binary is not installed / not on PATH."""
+
+    def __init__(self) -> None:
+        super().__init__("ebook-convert not installed or not on PATH")
+
+
+class CalibreSmtpError(CalibreMcpError):
+    """calibre-smtp exited non-zero; carries the command, exit code, and stderr.
+
+    stderr is expected to already be scrubbed of the SMTP password by the caller.
+    """
+
+    def __init__(self, cmd: list[str], exit_code: int, stderr: str) -> None:
+        self.cmd = cmd
+        self.exit_code = exit_code
+        self.stderr = stderr
+        super().__init__(f"calibre-smtp failed (exit {exit_code}): {stderr.strip()}")
+
+
+class CalibreSmtpNotFoundError(CalibreMcpError):
+    """The calibre-smtp binary is not installed / not on PATH."""
+
+    def __init__(self) -> None:
+        super().__init__("calibre-smtp not installed or not on PATH")
+
+
+class SmtpNotConfiguredError(ConfigError):
+    """A required CALIBRE_MCP_SMTP_* environment variable is unset."""
+
+    def __init__(self, missing_var: str) -> None:
+        self.missing_var = missing_var
+        super().__init__(
+            f"SMTP not configured; set {missing_var} (see CALIBRE_MCP_SMTP_* vars)"
+        )
