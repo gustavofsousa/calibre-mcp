@@ -11,18 +11,37 @@ CONV-01 AC-3:   refuses (no overwrite) when the target format already exists.
 CONV-01 AC-4:   refuses before converting when the book has no source file.
 CONV-01 AC-5/6: a convert failure surfaces stderr, adds nothing, and the
   backup happens BEFORE add_format.
+EMAIL-01 AC-2:  plan (no token) sends nothing and returns a confirmation_token.
+EMAIL-01 AC-1/3: apply (token) sends via calibre-smtp with the resolved format.
+EMAIL-01 AC-5:  the SMTP password never appears in any returned dict.
+EMAIL-01 AC-6:  missing SMTP env raises SmtpNotConfiguredError, no send.
+EMAIL-01 AC-7:  no attachable format refuses before sending.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
 
+from calibre_mcp.calibre_smtp_runner import CalibreSmtpRunner
 from calibre_mcp.calibredb_runner import CalibredbRunner
-from calibre_mcp.config import Config
-from calibre_mcp.errors import EbookConvertError, InvalidInputError
+from calibre_mcp.config import (
+    SMTP_FROM_ENV,
+    SMTP_PASSWORD_ENV,
+    SMTP_RELAY_ENV,
+    SMTP_USERNAME_ENV,
+    Config,
+)
+from calibre_mcp.errors import (
+    ConfirmationError,
+    EbookConvertError,
+    InvalidInputError,
+    SmtpNotConfiguredError,
+)
 from calibre_mcp.library import CalibreLibrary
 
 REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
@@ -197,3 +216,197 @@ def test_convert_book_unsupported_target_format_rejected(
         facade.convert_book(book_id, "bogus")
 
     assert "bogus" in str(excinfo.value)
+
+
+# ----------------------------------------------------------------- email_book
+
+_STUB_SMTP_SOURCE = '''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+with open(os.environ["STUB_RECORD_FILE"], "w") as f:
+    json.dump(sys.argv[1:], f)
+sys.exit(0)
+'''
+
+
+@pytest.fixture
+def smtp_stub(tmp_path: Path) -> Path:
+    stub = tmp_path / "calibre-smtp-stub.py"
+    stub.write_text(_STUB_SMTP_SOURCE)
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    return stub
+
+
+@pytest.fixture
+def smtp_record(tmp_path: Path, monkeypatch) -> Path:
+    record = tmp_path / "argv.json"
+    monkeypatch.setenv("STUB_RECORD_FILE", str(record))
+    return record
+
+
+@pytest.fixture
+def smtp_env(monkeypatch) -> None:
+    monkeypatch.setenv(SMTP_RELAY_ENV, "smtp.example.com")
+    monkeypatch.setenv(SMTP_USERNAME_ENV, "alice")
+    monkeypatch.setenv(SMTP_PASSWORD_ENV, "s3cr3t-p4ss")
+    monkeypatch.setenv(SMTP_FROM_ENV, "alice@example.com")
+
+
+@pytest.fixture
+def mailer_facade(facade: CalibreLibrary, smtp_stub: Path) -> CalibreLibrary:
+    facade._mailer = CalibreSmtpRunner(binary=str(smtp_stub))
+    return facade
+
+
+@pytest.mark.integration
+def test_email_book_plan_sends_nothing_and_returns_token(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+):
+    # EMAIL-01 AC-2: no token -> plan (recipient/format/subject/file) + token,
+    # nothing sent.
+    book_id = _seed_book(scratch_library, tmp_path)
+
+    plan = mailer_facade.email_book(book_id, "bob@example.com")
+
+    assert plan["status"] == "plan"
+    assert plan["recipient"] == "bob@example.com"
+    assert plan["format"] == "EPUB"
+    assert plan["file"]
+    assert plan["confirmation_token"]
+    assert not smtp_record.exists()  # nothing sent
+
+
+@pytest.mark.integration
+def test_email_book_apply_with_token_sends_via_calibre_smtp(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+    smtp_env: None,
+):
+    # EMAIL-01 AC-1/AC-3: matching token -> calibre-smtp invoked with the
+    # resolved attachment.
+    book_id = _seed_book(scratch_library, tmp_path)
+    plan = mailer_facade.email_book(book_id, "bob@example.com")
+
+    result = mailer_facade.email_book(
+        book_id, "bob@example.com", token=plan["confirmation_token"]
+    )
+
+    assert result["status"] == "sent"
+    argv = json.loads(smtp_record.read_text())
+    assert "-a" in argv and argv[argv.index("-a") + 1] == plan["file"]
+    assert "bob@example.com" in argv
+
+
+@pytest.mark.integration
+def test_email_book_token_mismatch_refuses_and_sends_nothing(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+    smtp_env: None,
+):
+    # plan->confirm integrity: a wrong token is refused, nothing sent.
+    book_id = _seed_book(scratch_library, tmp_path)
+
+    with pytest.raises(ConfirmationError):
+        mailer_facade.email_book(book_id, "bob@example.com", token="deadbeefdeadbeef")
+
+    assert not smtp_record.exists()
+
+
+@pytest.mark.integration
+def test_email_book_missing_smtp_env_raises_not_configured_no_send(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+    monkeypatch,
+):
+    # EMAIL-01 AC-6: SMTP unset -> SmtpNotConfiguredError naming the var, no send.
+    monkeypatch.delenv(SMTP_RELAY_ENV, raising=False)
+    book_id = _seed_book(scratch_library, tmp_path)
+    plan = mailer_facade.email_book(book_id, "bob@example.com")
+
+    with pytest.raises(SmtpNotConfiguredError) as excinfo:
+        mailer_facade.email_book(
+            book_id, "bob@example.com", token=plan["confirmation_token"]
+        )
+
+    assert SMTP_RELAY_ENV in str(excinfo.value)
+    assert not smtp_record.exists()
+
+
+@pytest.mark.integration
+def test_email_book_no_attachable_format_refuses_before_sending(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+):
+    # EMAIL-01 AC-7: an explicit format the book doesn't have refuses upfront.
+    book_id = _seed_book(scratch_library, tmp_path)
+
+    with pytest.raises(InvalidInputError) as excinfo:
+        mailer_facade.email_book(book_id, "bob@example.com", format="pdf")
+
+    assert "PDF" in str(excinfo.value)
+    assert not smtp_record.exists()
+
+
+@pytest.mark.integration
+def test_email_book_invalid_recipient_rejected(
+    mailer_facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+):
+    # basic recipient-shape validation before any plan/send.
+    book_id = _seed_book(scratch_library, tmp_path)
+
+    with pytest.raises(InvalidInputError):
+        mailer_facade.email_book(book_id, "not-an-email")
+
+
+@pytest.mark.integration
+def test_email_book_password_never_appears_in_plan_or_result(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    smtp_record: Path,
+    smtp_env: None,
+):
+    # EMAIL-01 AC-5: the SMTP password never appears in the plan or the result.
+    book_id = _seed_book(scratch_library, tmp_path)
+    password = "s3cr3t-p4ss"
+
+    plan = mailer_facade.email_book(book_id, "bob@example.com")
+    result = mailer_facade.email_book(
+        book_id, "bob@example.com", token=plan["confirmation_token"]
+    )
+
+    assert password not in json.dumps(plan)
+    assert password not in json.dumps(result)
+
+
+@pytest.mark.integration
+def test_email_book_no_metadata_backup_taken(
+    mailer_facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    backup_root: Path,
+    smtp_record: Path,
+    smtp_env: None,
+):
+    # EMAIL-01: no library mutation -> no metadata.db backup for a send.
+    book_id = _seed_book(scratch_library, tmp_path)
+    plan = mailer_facade.email_book(book_id, "bob@example.com")
+
+    mailer_facade.email_book(
+        book_id, "bob@example.com", token=plan["confirmation_token"]
+    )
+
+    assert _snapshots(backup_root) == []

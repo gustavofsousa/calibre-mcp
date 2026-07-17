@@ -13,8 +13,9 @@ import tempfile
 from pathlib import Path
 
 from .backup import backup_metadata_db, trash_book_files
+from .calibre_smtp_runner import CalibreSmtpRunner
 from .calibredb_runner import CalibredbRunner
-from .config import Config
+from .config import Config, load_smtp_config
 from .confirmation import plan_token, verify
 from .ebook_convert_runner import EbookConvertRunner
 from .errors import InvalidInputError
@@ -63,6 +64,7 @@ class CalibreLibrary:
         self._reader = SqliteReader(config.db_path, config.library_path)
         self._runner = CalibredbRunner(config.library_path)
         self._converter = EbookConvertRunner()
+        self._mailer = CalibreSmtpRunner()
 
     def search_books(self, query: str) -> list[Book]:
         """Resolve ids via ``calibredb search`` then hydrate them (SEARCH-01).
@@ -269,6 +271,91 @@ class CalibreLibrary:
             "copied_files": trash.copied,
             "backup": str(backup),
         }
+
+    def email_book(
+        self,
+        book_id: int,
+        recipient: str,
+        format: str | None = None,  # noqa: A002 - matches design/spec param name
+        token: str | None = None,
+    ) -> dict:
+        """Email a book's file via the plan->confirm handshake (EMAIL-01, AD-012).
+
+        Outward-facing, so it is gated like ``update_metadata``/``remove_book``.
+        Plan step (no token): confirm the book exists, resolve the attachment
+        format/file, validate the recipient shape, and return the
+        recipient/format/subject/file plus a ``confirmation_token`` — nothing is
+        sent. Apply step (token): verify the token, load SMTP config from env
+        (``SmtpNotConfiguredError`` if unset, AC-6), then send via
+        ``calibre-smtp``. No metadata mutation, so no backup is taken. The SMTP
+        password is never included in the plan or the result (AC-5).
+        """
+        book = self._reader.get_book(book_id)  # exists-precheck, no send
+        self._validate_recipient(recipient)
+        attachment_format, attachment_path = self._resolve_email_attachment(
+            book_id, format
+        )
+        subject = f"Sending you: {book.title}"
+        payload = {"recipient": recipient, "format": attachment_format}
+
+        if token is None:
+            return {
+                "status": "plan",
+                "book_id": book_id,
+                "recipient": recipient,
+                "format": attachment_format,
+                "subject": subject,
+                "file": str(attachment_path),
+                "confirmation_token": plan_token(_OP_EMAIL, book_id, payload),
+            }
+
+        verify(_OP_EMAIL, book_id, payload, token)  # mismatch -> raise, no send
+        smtp_cfg = load_smtp_config()  # AC-6: raises SmtpNotConfiguredError if unset
+        self._mailer.send(
+            smtp_cfg,
+            smtp_cfg.sender,
+            recipient,
+            subject,
+            f"Sent via calibre-mcp: {book.title}",
+            attachment_path,
+        )
+        return {
+            "status": "sent",
+            "book_id": book_id,
+            "recipient": recipient,
+            "format": attachment_format,
+        }
+
+    def _resolve_email_attachment(
+        self, book_id: int, format: str | None  # noqa: A002
+    ) -> tuple[str, Path]:
+        """Pick the attachment format: explicit ``format``, else device-preference
+        order (EMAIL-01 AC-3); refuse before sending if none is attachable (AC-7).
+        """
+        files = self._reader.format_files(book_id)
+        if format is not None:
+            wanted = format.upper()
+            if wanted not in files:
+                raise InvalidInputError(
+                    f"book {book_id} has no {wanted} file to attach"
+                )
+            return wanted, files[wanted]
+
+        for candidate in EMAIL_FORMAT_PREFERENCE:
+            if candidate in files:
+                return candidate, files[candidate]
+        raise InvalidInputError(f"book {book_id} has no file to attach")
+
+    @staticmethod
+    def _validate_recipient(recipient: str) -> None:
+        """Reject an obviously-malformed recipient before any send (basic shape)."""
+        if (
+            not isinstance(recipient, str)
+            or "@" not in recipient
+            or recipient.startswith("@")
+            or recipient.endswith("@")
+        ):
+            raise InvalidInputError(f"invalid recipient email address: {recipient!r}")
 
     @staticmethod
     def _validate_edit_fields(fields: dict) -> None:
