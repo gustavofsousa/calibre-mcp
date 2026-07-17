@@ -233,28 +233,28 @@ outside the library. Built on the P1 read primitives (resolve id → attach its 
 | -------------- | ------------------------- | ------ | ------- |
 | SEARCH-01      | P1: Search & browse       | Tasks  | Implementing |
 | SEARCH-02      | P1: Search & browse       | Tasks  | Implementing |
-| SEARCH-03      | P1: Search & browse       | Design | Pending |
+| SEARCH-03      | P1: Search & browse       | Tasks  | Implementing |
 | CFG-01         | P1: Search & browse       | Tasks  | Implementing |
 | VIEW-01        | P1: View metadata         | Tasks  | Implementing |
 | VIEW-02        | P1: View metadata         | Tasks  | Implementing |
 | VIEW-03        | P1: View metadata         | Tasks  | Implementing |
-| EDIT-01        | P1: Edit metadata         | Design | Pending |
+| EDIT-01        | P1: Edit metadata         | Tasks  | Implementing |
 | EDIT-02        | P1: Edit metadata         | Tasks  | Implementing |
-| EDIT-03        | P1: Edit metadata         | Design | Pending |
-| EDIT-04        | P1: Edit metadata         | Design | Pending |
-| EDIT-05        | P1: Edit metadata         | Design | Pending |
-| EDIT-06        | P1: Edit metadata         | Design | Pending |
-| EDIT-07        | P1: Edit metadata         | Design | Pending |
+| EDIT-03        | P1: Edit metadata         | Tasks  | Implementing |
+| EDIT-04        | P1: Edit metadata         | Tasks  | Implementing |
+| EDIT-05        | P1: Edit metadata         | Tasks  | Implementing |
+| EDIT-06        | P1: Edit metadata         | Tasks  | Implementing |
+| EDIT-07        | P1: Edit metadata         | Tasks  | Implementing |
 | ADD-01         | P1: Add a book            | Tasks  | Implementing |
-| ADD-02         | P1: Add a book            | Design | Pending |
+| ADD-02         | P1: Add a book            | Tasks  | Implementing |
 | ADD-03         | P1: Add a book            | Tasks  | Implementing |
 | ADD-04         | P1: Add a book            | Tasks  | Implementing |
-| REM-01         | P1: Remove a book         | Design | Pending |
+| REM-01         | P1: Remove a book         | Tasks  | Implementing |
 | REM-02         | P1: Remove a book         | Tasks  | Implementing |
-| REM-03         | P1: Remove a book         | Design | Pending |
-| REM-04         | P1: Remove a book         | Design | Pending |
-| REM-05         | P1: Remove a book         | Design | Pending |
-| REM-06         | P1: Remove a book         | Design | Pending |
+| REM-03         | P1: Remove a book         | Tasks  | Implementing |
+| REM-04         | P1: Remove a book         | Tasks  | Implementing |
+| REM-05         | P1: Remove a book         | Tasks  | Implementing |
+| REM-06         | P1: Remove a book         | Tasks  | Implementing |
 | SAFE-01        | P1: Data-safety net       | Tasks  | Implementing |
 | SAFE-02        | P1: Data-safety net       | Tasks  | Implementing |
 | SAFE-03        | P1: Data-safety net       | Tasks  | Implementing |

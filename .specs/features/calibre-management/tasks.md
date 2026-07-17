@@ -271,7 +271,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T8: Facade — reads (SEARCH-01/03, SEARCH-02, VIEW-01/02)
+### T8: Facade — reads (SEARCH-01/03, SEARCH-02, VIEW-01/02)  — **Status: ✅ Complete**
 
 **What**: `CalibreLibrary` read methods: `search_books` (runner.search → reader.hydrate), `list_books`, `get_book`.
 **Where**: `src/calibre_mcp/library.py`, `tests/integration/test_library_reads.py`
@@ -297,7 +297,7 @@ T8,T9 ──→ T10
 
 ---
 
-### T9: Facade — mutations (EDIT-01..07, ADD-01..04, REM-01..06, SAFE ordering)
+### T9: Facade — mutations (EDIT-01..07, ADD-01..04, REM-01..06, SAFE ordering)  — **Status: ✅ Complete**
 
 **What**: `CalibreLibrary` mutation methods with the plan→confirm + backup-before-write flow: `update_metadata`, `add_book`, `remove_book`.
 **Where**: `src/calibre_mcp/library.py` (modify), `tests/integration/test_library_mutations.py`
