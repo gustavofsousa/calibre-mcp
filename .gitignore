@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# uv
+.uv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Calibre MCP backups (never commit library snapshots)
+.calibre-mcp-backups/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
