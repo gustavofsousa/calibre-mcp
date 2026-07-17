@@ -50,8 +50,9 @@ _SORT_COLUMNS = {
 class SqliteReader:
     """Read-only reader over a Calibre ``metadata.db``."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, library_path: Path) -> None:
         self._db_path = Path(db_path)
+        self._library_path = Path(library_path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
@@ -222,3 +223,62 @@ class SqliteReader:
             (book_id,),
         ).fetchall()
         return [r["format"] for r in rows]
+
+    def format_files(self, book_id: int) -> dict[str, Path]:
+        """Map each format (e.g. ``"EPUB"``) to its absolute on-disk path
+        (ORG-01/CONV-01/EMAIL-01 path resolution, AD-017).
+
+        Raises ``BookNotFoundError`` for an unknown id; raises a clear
+        ``InvalidInputError`` when the metadata references a file that is not
+        actually on disk, rather than passing a bad path to a CLI.
+        """
+        conn = self._connect()
+        try:
+            book_row = conn.execute(
+                "SELECT path FROM books WHERE id = ?", (book_id,)
+            ).fetchone()
+            if book_row is None:
+                raise BookNotFoundError(book_id)
+
+            data_rows = conn.execute(
+                "SELECT format, name FROM data WHERE book = ?", (book_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+
+        files: dict[str, Path] = {}
+        for row in data_rows:
+            file_path = (
+                self._library_path / book_row["path"] / row["name"]
+            ).with_suffix(f".{row['format'].lower()}")
+            if not file_path.is_file():
+                raise InvalidInputError(
+                    f"format file for book {book_id} ({row['format']}) not "
+                    f"found on disk: {file_path}"
+                )
+            files[row["format"]] = file_path
+        return files
+
+    def find_duplicate_groups(self) -> list[list[Book]]:
+        """Group likely-duplicate books by normalized (title, primary author)
+        (ORG-01). Groups have size >= 2; no duplicates -> empty list.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT id FROM books").fetchall()
+            books = [self._fetch_book(conn, row["id"]) for row in rows]
+        finally:
+            conn.close()
+
+        groups: dict[tuple[str, str], list[Book]] = {}
+        for book in books:
+            if book is None:
+                continue
+            primary_author = book.authors[0] if book.authors else ""
+            key = (
+                book.title.strip().casefold(),
+                primary_author.strip().casefold(),
+            )
+            groups.setdefault(key, []).append(book)
+
+        return [group for group in groups.values() if len(group) >= 2]

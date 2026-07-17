@@ -12,18 +12,41 @@ SEARCH-02: list_books returns a page ordered by the requested field.
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.errors import BookNotFoundError, InvalidInputError
 from calibre_mcp.sqlite_reader import Book, SqliteReader
+
+REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+
+
+def _sample_epub(tmp_path: Path, name: str = "sample.epub", index: int = 0) -> Path:
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) <= index:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    dest = tmp_path / name
+    shutil.copy2(sources[index], dest)
+    return dest
+
+
+def _seed_book(
+    scratch_library: Path, tmp_path: Path, name: str = "seed.epub", index: int = 0
+) -> int:
+    result = CalibredbRunner(scratch_library).add(
+        _sample_epub(tmp_path, name, index)
+    )
+    assert result.book_id is not None
+    return result.book_id
 
 
 @pytest.fixture
 def reader(real_library: Path) -> SqliteReader:
-    return SqliteReader(real_library / "metadata.db")
+    return SqliteReader(real_library / "metadata.db", real_library)
 
 
 @pytest.mark.integration
@@ -141,3 +164,77 @@ def test_count_books_matches_independent_query(
         conn.close()
 
     assert reader.count_books() == expected
+
+
+# ---------------------------------------------------------------- format_files
+
+
+@pytest.mark.integration
+def test_format_files_returns_absolute_path_per_format(reader: SqliteReader):
+    # AD-017: book 1 has EPUB; the resolved path exists and matches the layout.
+    files = reader.format_files(1)
+
+    assert "EPUB" in files
+    assert files["EPUB"].is_file()
+    assert files["EPUB"].suffix == ".epub"
+
+
+@pytest.mark.integration
+def test_format_files_unknown_book_raises_not_found(reader: SqliteReader):
+    with pytest.raises(BookNotFoundError) as excinfo:
+        reader.format_files(999999)
+
+    assert excinfo.value.book_id == 999999
+
+
+@pytest.mark.integration
+def test_format_files_missing_file_on_disk_raises_invalid_input(
+    scratch_library: Path, tmp_path: Path
+):
+    # Design Risks: metadata references a file that isn't there -> clear error,
+    # never a bad path passed to a CLI.
+    book_id = _seed_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+    book = reader.get_book(book_id)
+    shutil.rmtree(scratch_library / book.path)  # wipe the book's files on disk
+
+    with pytest.raises(InvalidInputError) as excinfo:
+        reader.format_files(book_id)
+
+    assert str(book_id) in str(excinfo.value)
+
+
+# ---------------------------------------------------------- find_duplicate_groups
+
+
+@pytest.mark.integration
+def test_find_duplicate_groups_groups_same_title_and_author(
+    scratch_library: Path, tmp_path: Path
+):
+    # ORG-01: two books with the same (title, primary author) -> one group of 2.
+    runner = CalibredbRunner(scratch_library)
+    id1 = _seed_book(scratch_library, tmp_path, "one.epub", index=0)
+    id2 = _seed_book(scratch_library, tmp_path, "two.epub", index=1)
+    runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
+    runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    groups = reader.find_duplicate_groups()
+
+    assert len(groups) == 1
+    assert {b.id for b in groups[0]} == {id1, id2}
+
+
+@pytest.mark.integration
+def test_find_duplicate_groups_no_duplicates_returns_empty_list(
+    scratch_library: Path, tmp_path: Path
+):
+    # ORG-01 AC-3: distinct (title, author) pairs -> no groups.
+    runner = CalibredbRunner(scratch_library)
+    id1 = _seed_book(scratch_library, tmp_path, "one.epub", index=0)
+    id2 = _seed_book(scratch_library, tmp_path, "two.epub", index=1)
+    runner.set_metadata(id1, {"title": "Title One", "authors": ["Author One"]})
+    runner.set_metadata(id2, {"title": "Title Two", "authors": ["Author Two"]})
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.find_duplicate_groups() == []

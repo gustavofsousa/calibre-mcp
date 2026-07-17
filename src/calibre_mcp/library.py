@@ -52,7 +52,7 @@ class CalibreLibrary:
 
     def __init__(self, config: Config) -> None:
         self._config = config
-        self._reader = SqliteReader(config.db_path)
+        self._reader = SqliteReader(config.db_path, config.library_path)
         self._runner = CalibredbRunner(config.library_path)
 
     def search_books(self, query: str) -> list[Book]:

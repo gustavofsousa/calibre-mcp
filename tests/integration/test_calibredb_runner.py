@@ -54,7 +54,9 @@ def test_add_returns_new_id(runner, scratch_library, tmp_path):
     assert result.duplicate is False
     assert isinstance(result.book_id, int)
     # the id really exists in the library
-    book = SqliteReader(scratch_library / "metadata.db").get_book(result.book_id)
+    book = SqliteReader(scratch_library / "metadata.db", scratch_library).get_book(
+        result.book_id
+    )
     assert book.id == result.book_id
 
 
@@ -95,7 +97,9 @@ def test_set_metadata_applies_list_field(runner, scratch_library, tmp_path):
 
     runner.set_metadata(result.book_id, {"tags": ["scifi", "classic"]})
 
-    book = SqliteReader(scratch_library / "metadata.db").get_book(result.book_id)
+    book = SqliteReader(scratch_library / "metadata.db", scratch_library).get_book(
+        result.book_id
+    )
     assert set(book.tags) == {"scifi", "classic"}
 
 
