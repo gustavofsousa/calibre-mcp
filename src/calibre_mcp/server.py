@@ -190,6 +190,61 @@ def remove_book(book_id: int, confirmation_token: str | None = None) -> dict:
     return _jsonify(_get_library().remove_book(book_id, token=confirmation_token))
 
 
+@mcp.tool()
+@_map_errors
+def convert_book(book_id: int, target_format: str) -> dict:
+    """Convert a book to ``target_format`` via ``ebook-convert`` (CONV-01).
+
+    ADDITIVE: the book's existing format(s) are kept — after a successful
+    convert the book has both the old and the new format. Refuses (no
+    overwrite) when the book already has ``target_format``. Supported target
+    formats: epub, azw3, mobi, pdf. Backs up ``metadata.db`` before attaching
+    the new format. A conversion failure (bad/corrupt source) surfaces its
+    stderr and adds nothing.
+    """
+    return _jsonify(_get_library().convert_book(book_id, target_format))
+
+
+@mcp.tool()
+@_map_errors
+def find_duplicates() -> dict:
+    """Find likely-duplicate books by normalized (title, primary author) (ORG-01).
+
+    READ-ONLY advisory report: groups (size >= 2) of books that look like
+    duplicates. Never mutates the library and never auto-merges — the host/user
+    decides what, if anything, to do with each group. No duplicates found
+    returns an empty group set, not an error.
+    """
+    return _get_library().find_duplicates()
+
+
+@mcp.tool()
+@_map_errors
+def email_book(
+    book_id: int,
+    recipient: str,
+    format: str | None = None,  # noqa: A002 - matches design/spec param name
+    confirmation_token: str | None = None,
+) -> dict:
+    """Email a book's file to ``recipient`` via ``calibre-smtp`` (EMAIL-01).
+
+    OUTWARD-FACING: uses a two-step plan->confirm handshake. HOST: surface the
+    returned plan (recipient, chosen format, subject, and file) to the USER and
+    only re-call with ``confirmation_token`` after they approve — nothing is
+    sent until then.
+
+    ``format`` picks the attachment explicitly; otherwise it is chosen by
+    device-preference order (epub, azw3, mobi, pdf). Requires
+    ``CALIBRE_MCP_SMTP_*`` environment variables to be set (relay, username,
+    password, sender); if unset, the apply step fails naming the missing
+    variable and sends nothing. A book with no attachable format is refused
+    before sending.
+    """
+    return _get_library().email_book(
+        book_id, recipient, format=format, token=confirmation_token
+    )
+
+
 def main() -> None:
     """Entry point: validate config at startup (CFG-01), then serve over stdio."""
     _get_library()  # fail fast with a clear ConfigError if the library path is bad

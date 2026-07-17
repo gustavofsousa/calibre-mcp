@@ -27,6 +27,9 @@ Coverage:
   REM-03     an unknown id surfaces a clear tool error (no false success).
   REM-06     the tool description states removal is recoverable + two-step.
   CFG-01     a missing library path surfaces a clear config tool error.
+  CONV-01    convert_book adds a format additively; unsupported target is an error.
+  ORG-01     find_duplicates returns groups; no duplicates -> empty group set.
+  EMAIL-01   email_book plan->confirm two-step, sent via a stubbed calibre-smtp.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ import contextlib
 import io
 import json
 import shutil
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +47,14 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 from calibre_mcp import server
+from calibre_mcp.calibre_smtp_runner import CalibreSmtpRunner
 from calibre_mcp.calibredb_runner import CalibredbRunner
+from calibre_mcp.config import (
+    SMTP_FROM_ENV,
+    SMTP_PASSWORD_ENV,
+    SMTP_RELAY_ENV,
+    SMTP_USERNAME_ENV,
+)
 
 REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
 
@@ -312,3 +323,161 @@ def test_missing_library_path_surfaces_config_tool_error(monkeypatch):
         _call("list_books", {})
 
     assert "CALIBRE_LIBRARY_PATH" in str(excinfo.value)
+
+
+# -------------------------------------------------------------------- CONVERT
+
+
+@pytest.mark.e2e
+def test_convert_book_adds_format_additively(seeded: int):
+    # CONV-01 AC-1/AC-2: convert epub -> pdf; both formats present afterward.
+    result = _call("convert_book", {"book_id": seeded, "target_format": "pdf"})
+
+    assert result["status"] == "converted"
+    assert set(result["book"]["formats"]) == {"EPUB", "PDF"}
+
+
+@pytest.mark.e2e
+def test_convert_book_unsupported_format_is_tool_error(seeded: int):
+    # CONV-01 boundary: an unsupported target format is an explicit tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call("convert_book", {"book_id": seeded, "target_format": "bogus"})
+
+    assert "bogus" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_convert_book_description_states_additive():
+    # CONV-01: the tool description states it keeps existing formats.
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["convert_book"].description.lower()
+
+    assert "additive" in text or "keep" in text
+    assert "refuse" in text
+
+
+# -------------------------------------------------------------- DUPLICATES
+
+
+@pytest.mark.e2e
+def test_find_duplicates_returns_groups(env: Path, tmp_path: Path):
+    # ORG-01 AC-1: two same-title/same-author books -> one group of 2.
+    runner = CalibredbRunner(env)
+    id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
+    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    id2 = runner.add(tmp_path / "two.epub").book_id
+    runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
+    runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
+
+    result = _call("find_duplicates", {})
+
+    assert result["group_count"] == 1
+    assert {b["id"] for b in result["groups"][0]["books"]} == {id1, id2}
+
+
+@pytest.mark.e2e
+def test_find_duplicates_no_duplicates_returns_empty_group_set(seeded: int):
+    # ORG-01 AC-3: no duplicates -> empty group set, not an error.
+    result = _call("find_duplicates", {})
+
+    assert result == {"group_count": 0, "groups": []}
+
+
+# ------------------------------------------------------------------- EMAIL
+
+_STUB_SMTP_SOURCE = '''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+with open(os.environ["STUB_RECORD_FILE"], "w") as f:
+    json.dump(sys.argv[1:], f)
+sys.exit(0)
+'''
+
+
+@pytest.fixture
+def smtp_stub(tmp_path: Path) -> Path:
+    stub = tmp_path / "calibre-smtp-stub.py"
+    stub.write_text(_STUB_SMTP_SOURCE)
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    return stub
+
+
+@pytest.fixture
+def smtp_record(tmp_path: Path, monkeypatch) -> Path:
+    record = tmp_path / "argv.json"
+    monkeypatch.setenv("STUB_RECORD_FILE", str(record))
+    return record
+
+
+@pytest.fixture
+def smtp_env(monkeypatch) -> None:
+    monkeypatch.setenv(SMTP_RELAY_ENV, "smtp.example.com")
+    monkeypatch.setenv(SMTP_USERNAME_ENV, "alice")
+    monkeypatch.setenv(SMTP_PASSWORD_ENV, "s3cr3t-p4ss")
+    monkeypatch.setenv(SMTP_FROM_ENV, "alice@example.com")
+
+
+@pytest.fixture
+def mailer_seeded(seeded: int, smtp_stub: Path) -> int:
+    """Point the cached library's mailer at the stubbed calibre-smtp binary."""
+    server._get_library()._mailer = CalibreSmtpRunner(binary=str(smtp_stub))
+    return seeded
+
+
+@pytest.mark.e2e
+def test_email_book_plan_then_confirm_sends_via_stub(
+    mailer_seeded: int, smtp_record: Path, smtp_env: None
+):
+    # EMAIL-01 AC-2: plan sends nothing + returns a token.
+    plan = _call("email_book", {"book_id": mailer_seeded, "recipient": "bob@x.com"})
+
+    assert plan["status"] == "plan"
+    assert plan["confirmation_token"]
+    assert not smtp_record.exists()
+
+    # EMAIL-01 AC-1: apply with the token sends via calibre-smtp.
+    result = _call(
+        "email_book",
+        {
+            "book_id": mailer_seeded,
+            "recipient": "bob@x.com",
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert result["status"] == "sent"
+    argv = json.loads(smtp_record.read_text())
+    assert "bob@x.com" in argv
+
+
+@pytest.mark.e2e
+def test_email_book_missing_smtp_env_is_tool_error(
+    mailer_seeded: int, smtp_record: Path
+):
+    # EMAIL-01 AC-6: SMTP unset -> a clear tool error naming the missing var.
+    plan = _call("email_book", {"book_id": mailer_seeded, "recipient": "bob@x.com"})
+
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "email_book",
+            {
+                "book_id": mailer_seeded,
+                "recipient": "bob@x.com",
+                "confirmation_token": plan["confirmation_token"],
+            },
+        )
+
+    assert SMTP_RELAY_ENV in str(excinfo.value)
+    assert not smtp_record.exists()
+
+
+@pytest.mark.e2e
+def test_email_book_description_instructs_host_to_surface_plan():
+    # EMAIL-01: outward-facing send -> host must surface the plan before apply.
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["email_book"].description.lower()
+
+    assert "host" in text and "surface" in text
+    assert "confirmation_token" in text
