@@ -123,6 +123,55 @@ def test_get_book_unknown_id_raises_not_found(facade: CalibreLibrary):
 
 
 @pytest.mark.integration
+def test_library_stats_includes_known_duplicate_and_ordered_top_lists(
+    facade: CalibreLibrary,
+):
+    # STATS-01-01/06: full AC-1 shape composed; duplicate_title_groups reuses
+    # find_duplicate_groups() (the "A fé explicada" duplicate, ids 68 & 132);
+    # top-10 lists are length-capped and ordered by count descending.
+    stats = facade.library_stats()
+
+    groups = stats["data_quality_flags"]["duplicate_title_groups"]
+    matching = [g for g in groups if g["key"]["title"] == "A fé explicada"]
+    assert matching, "expected the known 'A fé explicada' duplicate group"
+    assert {b["id"] for b in matching[0]["books"]} == {68, 132}
+
+    assert len(stats["authors"]["top"]) <= 10
+    assert len(stats["tags"]["top"]) <= 10
+    author_counts = [entry["count"] for entry in stats["authors"]["top"]]
+    assert author_counts == sorted(author_counts, reverse=True)
+
+
+@pytest.mark.integration
+def test_library_stats_empty_library_returns_same_shape(scratch_library: Path):
+    # STATS-01-02 (AC-2): empty library -> same shape, zeroed/empty, no error.
+    facade = CalibreLibrary(_config_for(scratch_library))
+
+    stats = facade.library_stats()
+
+    assert stats["totals"]["books"] == 0
+    assert stats["authors"] == {"distinct": 0, "top": []}
+    assert stats["tags"] == {"distinct": 0, "top": []}
+    assert stats["data_quality_flags"] == {
+        "unknown_author_books": 0,
+        "placeholder_pubdate_0101": 0,
+        "series_unused": True,
+        "rating_unused": True,
+        "duplicate_title_groups": [],
+    }
+
+
+@pytest.mark.integration
+def test_library_stats_touches_no_sqlite3_or_subprocess(facade: CalibreLibrary):
+    # AD-001: composing library_stats() must not reach for sqlite3/subprocess
+    # directly (mirrors the existing facade-wide invariant test).
+    facade.library_stats()
+
+    assert not hasattr(library_module, "sqlite3")
+    assert not hasattr(library_module, "subprocess")
+
+
+@pytest.mark.integration
 def test_facade_never_imports_sqlite3_or_subprocess():
     # Invariant (design §Layer rule): the facade composes reader+runner; it must
     # not reach for sqlite3/subprocess itself. Imports become module attributes,

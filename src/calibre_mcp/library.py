@@ -10,6 +10,7 @@ writes through ``CalibredbRunner`` (the one invariant a reviewer checks).
 from __future__ import annotations
 
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 
 from .backup import backup_metadata_db, trash_book_files
@@ -113,6 +114,21 @@ class CalibreLibrary:
             "group_count": len(groups),
             "groups": [self._shape_duplicate_group(group) for group in groups],
         }
+
+    def library_stats(self) -> dict:
+        """Return the aggregate baseline profile of the library (STATS-01).
+
+        Pure read (no subprocess, lock-independent). Composes the reader's
+        snapshot with ``find_duplicate_groups()`` (reused as-is, ORG-01) so
+        ``data_quality_flags.duplicate_title_groups`` matches ``find_duplicates``.
+        """
+        stats = asdict(self._reader.library_stats())
+        data_quality_flags = stats.pop("data_quality")
+        groups = self._reader.find_duplicate_groups()
+        data_quality_flags["duplicate_title_groups"] = [
+            self._shape_duplicate_group(group) for group in groups
+        ]
+        return {**stats, "data_quality_flags": data_quality_flags}
 
     def convert_book(self, book_id: int, target_format: str) -> dict:
         """Convert a book to ``target_format``, keeping the existing format(s)
