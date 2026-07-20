@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from calibre_mcp import server
 from calibre_mcp.calibre_smtp_runner import CalibreSmtpRunner
@@ -73,6 +73,12 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     """Invoke a registered tool in-process and parse its JSON result payload."""
     result = asyncio.run(server.mcp.call_tool(name, arguments))
     return json.loads(result[0].text)
+
+
+def _read_resource(uri: str) -> Any:
+    """Read a registered resource in-process and parse its JSON content."""
+    result = asyncio.run(server.mcp.read_resource(uri))
+    return json.loads(result[0].content)
 
 
 @pytest.fixture
@@ -491,5 +497,68 @@ def test_stdout_stays_clean_across_p2_tool_calls(mailer_seeded: int, smtp_record
         _call("find_duplicates", {})
         _call("convert_book", {"book_id": mailer_seeded, "target_format": "pdf"})
         _call("email_book", {"book_id": mailer_seeded, "recipient": "bob@x.com"})
+
+    assert buffer.getvalue() == ""
+
+
+# --------------------------------------------------------------------- STATS
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_returns_well_formed_profile(
+    env: Path, tmp_path: Path
+):
+    # STATS-01-01: totals.books matches count_books(); the profile shape is
+    # well-formed and the known duplicate group is present.
+    runner = CalibredbRunner(env)
+    id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
+    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    id2 = runner.add(tmp_path / "two.epub").book_id
+    runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
+    runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
+
+    stats = _read_resource("calibre://library/stats")
+
+    assert stats["totals"]["books"] == server._get_library().count_books()
+    groups = stats["data_quality_flags"]["duplicate_title_groups"]
+    assert {b["id"] for b in groups[0]["books"]} == {id1, id2}
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_empty_library_is_zeroed_not_an_error(env: Path):
+    # STATS-01-02 (AC-2): empty library -> valid zeroed profile, never an error.
+    stats = _read_resource("calibre://library/stats")
+
+    assert stats["totals"]["books"] == 0
+    assert stats["data_quality_flags"]["duplicate_title_groups"] == []
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_unreadable_db_is_resource_error(env: Path):
+    # STATS-01-04 (AC-4): a corrupt metadata.db (present on disk, unreadable
+    # as SQLite) -> a named ResourceError, never a silent empty/wrong profile.
+    (env / "metadata.db").write_bytes(b"not a real sqlite file at all")
+
+    with pytest.raises(ResourceError) as excinfo:
+        _read_resource("calibre://library/stats")
+
+    assert "file is not a database" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_two_reads_are_identical(seeded: int):
+    # STATS-01-05 (AC-5): deterministic — two reads with no changes match.
+    first = _read_resource("calibre://library/stats")
+    second = _read_resource("calibre://library/stats")
+
+    assert first == second
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_stdout_stays_clean(seeded: int):
+    # Design Risks: reading the resource must never write to stdout.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _read_resource("calibre://library/stats")
 
     assert buffer.getvalue() == ""

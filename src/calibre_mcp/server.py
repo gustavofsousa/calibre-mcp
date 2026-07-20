@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import functools
 import logging
+import sqlite3
 import sys
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from .config import load_config
 from .errors import CalibreMcpError
@@ -64,6 +65,28 @@ def _map_errors(fn: Callable[..., dict]) -> Callable[..., dict]:
             return fn(*args, **kwargs)
         except CalibreMcpError as exc:
             raise ToolError(str(exc)) from exc
+
+    return wrapper
+
+
+def _map_resource_errors(fn: Callable[[], dict]) -> Callable[[], dict]:
+    """Map every known read failure to an explicit ``ResourceError`` (AC-4).
+
+    Mirrors ``_map_errors`` for the resource surface: a ``CalibreMcpError``
+    (e.g. bad config) or a raw ``sqlite3.Error``/``OSError`` (e.g. missing or
+    corrupt ``metadata.db``) surfaces as a named ``ResourceError`` instead of a
+    silent empty/wrong profile. Catching these does not violate the "no SQL
+    outside the read layer" invariant (AD-001) — no SQL is issued here.
+    """
+
+    @functools.wraps(fn)
+    def wrapper() -> dict:
+        try:
+            return fn()
+        except CalibreMcpError as exc:
+            raise ResourceError(str(exc)) from exc
+        except (sqlite3.Error, OSError) as exc:
+            raise ResourceError(str(exc)) from exc
 
     return wrapper
 
@@ -243,6 +266,22 @@ def email_book(
     return _get_library().email_book(
         book_id, recipient, format=format, token=confirmation_token
     )
+
+
+@mcp.resource(
+    "calibre://library/stats",
+    name="library_stats",
+    mime_type="application/json",
+)
+@_map_resource_errors
+def library_stats_resource() -> dict:
+    """Aggregate baseline profile of the library (STATS-01): totals, format/
+    language mix, metadata completeness, identifier types, top authors/tags,
+    and data-quality flags (including duplicate-title groups). Read-only,
+    parameter-free, and lock-independent — known on connect without a tool
+    call.
+    """
+    return _get_library().library_stats()
 
 
 def main() -> None:
