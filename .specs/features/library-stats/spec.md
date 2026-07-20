@@ -119,26 +119,29 @@ library's "A fé explicada" duplicate at ids 68/132) appears in `duplicate_title
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| STATS-01-01 | P1: Auto-known library shape on connect | Design | Pending |
-| STATS-01-02 | P1: Auto-known library shape on connect | Design | Pending |
-| STATS-01-03 | P1: Auto-known library shape on connect | Design | Pending |
-| STATS-01-04 | P1: Auto-known library shape on connect | Design | Pending |
-| STATS-01-05 | P1: Auto-known library shape on connect | Design | Pending |
-| STATS-01-06 | P1: Auto-known library shape on connect | Design | Pending |
+| STATS-01-01 | P1: Auto-known library shape on connect | Design | ✅ Verified |
+| STATS-01-02 | P1: Auto-known library shape on connect | Design | ✅ Verified |
+| STATS-01-03 | P1: Auto-known library shape on connect | Design | ⚠️ Verified (architecture) — no test evidence; pre-existing, project-wide gap (also true of `get_book`/`list_books`), accepted as tracked tech debt, not a STATS-01 regression |
+| STATS-01-04 | P1: Auto-known library shape on connect | Design | ✅ Verified |
+| STATS-01-05 | P1: Auto-known library shape on connect | Design | ✅ Verified |
+| STATS-01-06 | P1: Auto-known library shape on connect | Design | ✅ Verified |
 
 **ID format:** `STATS-01-NN` (maps 1:1 to the six ACs of the P1 story above).
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 6 total, 0 mapped to tasks (pre-Design), 0 unmapped ⚠️
+**Coverage:** 6 total, 6 mapped to tasks (T1–T3), 0 unmapped ✅
 
 ---
 
 ## Success Criteria
 
-- [ ] `resources/read` on `calibre://library/stats` returns a well-formed profile matching AC-1's
+- [x] `resources/read` on `calibre://library/stats` returns a well-formed profile matching AC-1's
       shape against the real test library, with the known "A fé explicada" duplicate present.
-- [ ] Zero new raw SQL in `server.py`/`library.py` — the resource handler calls one new
+- [x] Zero new raw SQL in `server.py`/`library.py` — the resource handler calls one new
       `CalibreLibrary.library_stats()` method, which composes existing/new `SqliteReader` queries.
-- [ ] Empty-library and locked-DB paths both behave per AC-2/AC-3/AC-4 (verified via scratch
-      library fixtures, never the real library, per the existing test-safety rule).
+- [x] Empty-library and locked-DB paths both behave per AC-2/AC-3/AC-4 (verified via scratch
+      library fixtures, never the real library, per the existing test-safety rule). AC-3
+      (lock-independence) is architecturally verified (reuses `_connect()`'s lock-independent
+      `mode=ro` guarantee) but has no dedicated test — pre-existing project-wide gap, see
+      `validation.md`.
