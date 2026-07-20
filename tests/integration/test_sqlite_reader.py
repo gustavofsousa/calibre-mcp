@@ -291,6 +291,13 @@ def test_library_stats_grounded_facts_against_real_library(reader: SqliteReader)
     assert stats.data_quality["placeholder_pubdate_0101"] == 64
     assert stats.data_quality["unknown_author_books"] == 14
     assert stats.metadata_completeness["comments"]["filled"] == 49
+    # Edge case: real (non-placeholder) pubdates are mutually exclusive with
+    # placeholder_pubdate_0101 and counted separately (170 - 64 = 106).
+    assert stats.metadata_completeness["real_pubdate"]["filled"] == 106
+    # Edge case: books with no language recorded land in an explicit "unset"
+    # bucket rather than being silently dropped from the total.
+    assert stats.languages["unset"] == 91
+    assert sum(stats.languages.values()) == stats.totals["books"]
 
 
 @pytest.mark.integration
