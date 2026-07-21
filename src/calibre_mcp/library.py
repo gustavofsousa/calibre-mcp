@@ -14,12 +14,13 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .backup import backup_metadata_db, trash_book_files
+from .bulk_edit import LIST_FIELDS, LIST_MODES, resolve_fields
 from .calibre_smtp_runner import CalibreSmtpRunner
 from .calibredb_runner import CalibredbRunner
 from .config import Config, load_smtp_config
 from .confirmation import plan_token, verify
 from .ebook_convert_runner import EbookConvertRunner
-from .errors import InvalidInputError
+from .errors import BookNotFoundError, CalibreMcpError, InvalidInputError
 from .sqlite_reader import Book, SqliteReader
 
 # CONV-01: formats convert_book accepts as a target, and the device-preference
@@ -55,6 +56,12 @@ _RATING_MAX = 10
 _OP_UPDATE = "update_metadata"
 _OP_REMOVE = "remove_book"
 _OP_EMAIL = "email_book"
+_OP_UPDATE_BULK = "update_metadata_bulk"
+
+# Sentinel id bound into the bulk token in place of a single book id — the
+# batch identity lives entirely in the payload's ``book_ids`` (design §Data
+# Models).
+_BULK_TOKEN_ID = 0
 
 
 class CalibreLibrary:
@@ -209,6 +216,71 @@ class CalibreLibrary:
             "status": "applied",
             "book_id": book_id,
             "book": self._reader.get_book(book_id),  # re-read (EDIT-02)
+            "backup": str(backup),
+        }
+
+    def update_metadata_bulk(
+        self,
+        book_ids: list[int],
+        fields: dict,
+        list_mode: str = "replace",
+        token: str | None = None,
+    ) -> dict:
+        """Broadcast ``fields`` to N books via the plan->confirm handshake
+        (BEDIT-01..09).
+
+        Plan step (no token): validate input, then for each ``sorted(book_ids)``
+        emit a not-found row or a current->proposed diff (``proposed`` is the
+        per-book *resolved* set under ``list_mode``) plus one deterministic
+        ``confirmation_token`` over the whole batch — nothing is written.
+        Apply step (token): verify the token, back up ``metadata.db`` ONCE, then
+        best-effort apply each book in order — a per-book failure lands in
+        ``failed`` and the batch continues (never a false "all succeeded").
+        """
+        self._validate_bulk_input(book_ids, fields, list_mode)
+        ordered_ids = sorted(book_ids)
+        payload = {"book_ids": ordered_ids, "fields": fields, "list_mode": list_mode}
+
+        if token is None:
+            return {
+                "status": "plan",
+                "list_mode": list_mode,
+                "diffs": [
+                    self._bulk_plan_entry(book_id, fields, list_mode)
+                    for book_id in ordered_ids
+                ],
+                "confirmation_token": plan_token(
+                    _OP_UPDATE_BULK, _BULK_TOKEN_ID, payload
+                ),
+            }
+
+        verify(_OP_UPDATE_BULK, _BULK_TOKEN_ID, payload, token)  # BEDIT-03
+        backup = backup_metadata_db(  # BEDIT-05: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        applied: list[dict] = []
+        failed: list[dict] = []
+        for book_id in ordered_ids:
+            try:
+                book = self._reader.get_book(book_id)
+                resolved = resolve_fields(book, fields, list_mode)
+                self._runner.set_metadata(book_id, resolved)
+                reread = self._reader.get_book(book_id)
+                applied.append(
+                    {
+                        "book_id": book_id,
+                        "fields": {name: getattr(reread, name) for name in fields},
+                    }
+                )
+            except CalibreMcpError as exc:  # BEDIT-04: never aborts the batch
+                failed.append({"book_id": book_id, "error": str(exc)})
+
+        return {
+            "status": "applied",
+            "list_mode": list_mode,
+            "applied": applied,
+            "failed": failed,
             "backup": str(backup),
         }
 
@@ -372,6 +444,64 @@ class CalibreLibrary:
             or recipient.endswith("@")
         ):
             raise InvalidInputError(f"invalid recipient email address: {recipient!r}")
+
+    @staticmethod
+    def _validate_bulk_input(book_ids: list, fields: dict, list_mode: str) -> None:
+        """Reject invalid bulk input before any token/backup/write (BEDIT-06).
+
+        Checks, in order: ``list_mode`` is one of ``LIST_MODES``; ``book_ids``
+        is non-empty with no duplicates and every element a non-bool ``int``;
+        ``fields`` is non-empty and passes the single-book whitelist/value
+        checks; ``list_mode`` in ``{add, remove}`` requires at least one
+        ``LIST_FIELDS`` member in ``fields`` (a mode with nothing to apply to
+        is a caller error, spec edge case).
+        """
+        if list_mode not in LIST_MODES:
+            allowed = ", ".join(sorted(LIST_MODES))
+            raise InvalidInputError(
+                f"list_mode {list_mode!r} not allowed; allowed: {allowed}"
+            )
+
+        if not book_ids:
+            raise InvalidInputError("book_ids must not be empty")
+        if any(
+            isinstance(book_id, bool) or not isinstance(book_id, int)
+            for book_id in book_ids
+        ):
+            raise InvalidInputError(f"book_ids must all be integers, got {book_ids!r}")
+        if len(set(book_ids)) != len(book_ids):
+            raise InvalidInputError(
+                f"book_ids must not contain duplicates: {book_ids!r}"
+            )
+
+        if not fields:
+            raise InvalidInputError("fields must not be empty")
+        CalibreLibrary._validate_edit_fields(fields)
+
+        if list_mode in ("add", "remove") and not (set(fields) & LIST_FIELDS):
+            raise InvalidInputError(
+                f"list_mode {list_mode!r} requires at least one list field in "
+                f"fields ({sorted(LIST_FIELDS)}); got {sorted(fields)}"
+            )
+
+    def _bulk_plan_entry(self, book_id: int, fields: dict, list_mode: str) -> dict:
+        """Build one book's plan row (BEDIT-01, BEDIT-08 AC-4).
+
+        A vanished id is reported ``found: False`` (no diff, no abort — it
+        lands in ``failed`` at apply, BEDIT-04). ``proposed`` is the resolved
+        set under ``list_mode``, so the review matches exactly what is written.
+        """
+        try:
+            book = self._reader.get_book(book_id)
+        except BookNotFoundError:
+            return {"book_id": book_id, "found": False}
+
+        resolved = resolve_fields(book, fields, list_mode)
+        return {
+            "book_id": book_id,
+            "found": True,
+            "diff": self._build_diff(book, resolved),
+        }
 
     @staticmethod
     def _validate_edit_fields(fields: dict) -> None:
