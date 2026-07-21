@@ -225,6 +225,135 @@ def test_update_metadata_invalid_field_is_tool_error(seeded: int):
     assert "allowed" in str(excinfo.value)
 
 
+# ---------------------------------------------------------------- BULK EDIT
+
+
+@pytest.fixture
+def two_seeded(env: Path, tmp_path: Path) -> list[int]:
+    """Seed two DISTINCT books (different source files) and return their ids."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "one.epub")
+    shutil.copy2(sources[1], tmp_path / "two.epub")
+    id1 = runner.add(tmp_path / "one.epub").book_id
+    id2 = runner.add(tmp_path / "two.epub").book_id
+    assert id1 is not None and id2 is not None
+    return [id1, id2]
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_plan_then_apply_round_trip(two_seeded: list[int]):
+    # BEDIT-01/02: plan (no token) -> per-book diff + token, no write; apply
+    # (token) -> writes both books, re-read reflects the change.
+    plan = _call(
+        "update_metadata_bulk",
+        {"book_ids": two_seeded, "fields": {"series": "Dune"}},
+    )
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == set(two_seeded)
+    assert all(d["diff"]["series"]["proposed"] == "Dune" for d in plan["diffs"])
+    assert _call("get_book", {"book_id": two_seeded[0]})["series"] is None
+
+    applied = _call(
+        "update_metadata_bulk",
+        {
+            "book_ids": two_seeded,
+            "fields": {"series": "Dune"},
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "applied"
+    assert applied["failed"] == []
+    assert {a["book_id"] for a in applied["applied"]} == set(two_seeded)
+    for book_id in two_seeded:
+        assert _call("get_book", {"book_id": book_id})["series"] == "Dune"
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_partial_failure_reports_applied_and_failed(
+    two_seeded: list[int],
+):
+    # BEDIT-04: one vanished id fails alone; the other book still applies, and
+    # the result reports both applied and failed truthfully.
+    ok_id = two_seeded[0]
+    book_ids = [ok_id, 999999]
+    plan = _call(
+        "update_metadata_bulk",
+        {"book_ids": book_ids, "fields": {"series": "Dune"}},
+    )
+
+    applied = _call(
+        "update_metadata_bulk",
+        {
+            "book_ids": book_ids,
+            "fields": {"series": "Dune"},
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert {a["book_id"] for a in applied["applied"]} == {ok_id}
+    assert {f["book_id"] for f in applied["failed"]} == {999999}
+    assert _call("get_book", {"book_id": ok_id})["series"] == "Dune"
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_empty_book_ids_is_tool_error(env: Path):
+    # BEDIT-06: empty book_ids is rejected before any token/backup/write.
+    with pytest.raises(ToolError) as excinfo:
+        _call("update_metadata_bulk", {"book_ids": [], "fields": {"series": "Dune"}})
+
+    assert "book_ids" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_unknown_field_is_tool_error(two_seeded: list[int]):
+    # BEDIT-06: an unknown field is rejected as invalid input.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "update_metadata_bulk",
+            {"book_ids": two_seeded, "fields": {"bogus_field": "x"}},
+        )
+
+    assert "bogus_field" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_description_documents_list_mode_and_contract():
+    # T3 Done-when: docstring documents list_mode + the applied/failed contract.
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["update_metadata_bulk"].description.lower()
+
+    assert "host" in text and "surface" in text
+    assert "list_mode" in text
+    assert "add" in text and "remove" in text and "replace" in text
+    assert "applied" in text and "failed" in text
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_bulk_edit_calls(two_seeded: list[int]):
+    # Design Risks: stdout is the MCP framing channel; bulk edit must stay clean.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        plan = _call(
+            "update_metadata_bulk",
+            {"book_ids": two_seeded, "fields": {"series": "Dune"}},
+        )
+        _call(
+            "update_metadata_bulk",
+            {
+                "book_ids": two_seeded,
+                "fields": {"series": "Dune"},
+                "confirmation_token": plan["confirmation_token"],
+            },
+        )
+
+    assert buffer.getvalue() == ""
+
+
 # ---------------------------------------------------------------------- ADD
 
 

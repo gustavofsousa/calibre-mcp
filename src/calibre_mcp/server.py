@@ -180,6 +180,44 @@ def update_metadata(
 
 @mcp.tool()
 @_map_errors
+def update_metadata_bulk(
+    book_ids: list[int],
+    fields: dict[str, Any],
+    list_mode: str = "replace",
+    confirmation_token: str | None = None,
+) -> dict:
+    """Broadcast one set of field changes to many books, two-step plan->confirm
+    (BEDIT-01..09).
+
+    HOST: surface the returned per-book plan (each book's current->proposed
+    diff) to the USER and only re-call with ``confirmation_token`` after they
+    approve.
+
+    Without a token: nothing is written; returns a diff per book (or
+    ``found: false`` for a vanished id) plus one deterministic
+    ``confirmation_token`` covering the whole batch. With a matching token:
+    backs up ``metadata.db`` ONCE, then applies every book best-effort — a
+    single book's failure (vanished id, calibredb error) never voids the
+    batch; the result reports ``applied`` (with each book's re-read affected
+    fields) and ``failed`` (with the error) separately, so a partial failure
+    is never reported as a fake "all succeeded". A mismatched token is
+    refused before any write.
+
+    ``list_mode`` applies to the list-valued fields (authors, tags,
+    languages): ``replace`` (default) OVERWRITES each book's field with
+    exactly the supplied values — a footgun for broadcast tagging; ``add``
+    unions the supplied values into each book's existing ones (nothing
+    lost); ``remove`` subtracts the supplied values from each book's existing
+    ones (missing values ignored). Note Calibre may re-normalize written list
+    values (case-folding/dedup), so a re-read may not byte-match the plan.
+    """
+    return _get_library().update_metadata_bulk(
+        book_ids, fields, list_mode=list_mode, token=confirmation_token
+    )
+
+
+@mcp.tool()
+@_map_errors
 def add_book(path: str) -> dict:
     """Import an ebook file into the library by local filesystem path (ADD-01..04).
 
