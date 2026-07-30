@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .errors import BookNotFoundError, InvalidInputError
 
@@ -19,14 +20,14 @@ from .errors import BookNotFoundError, InvalidInputError
 class LibraryStats:
     """Aggregate baseline profile of the library (STATS-01), one snapshot."""
 
-    totals: dict
-    formats: dict
-    languages: dict
-    metadata_completeness: dict
-    identifier_types: dict
-    authors: dict
-    tags: dict
-    data_quality: dict
+    totals: dict[str, Any]
+    formats: dict[str, Any]
+    languages: dict[str, Any]
+    metadata_completeness: dict[str, Any]
+    identifier_types: dict[str, Any]
+    authors: dict[str, Any]
+    tags: dict[str, Any]
+    data_quality: dict[str, Any]
 
 
 @dataclass
@@ -109,7 +110,7 @@ class SqliteReader:
             row = conn.execute("SELECT COUNT(*) AS n FROM books").fetchone()
         finally:
             conn.close()
-        return row["n"]
+        return int(row["n"])
 
     def list_books(self, limit: int, offset: int, sort: str) -> list[Book]:
         """Return a page of books ordered by ``sort`` (SEARCH-02).
@@ -312,7 +313,7 @@ class SqliteReader:
         )
 
     @staticmethod
-    def _stats_totals(conn: sqlite3.Connection, books: int) -> dict:
+    def _stats_totals(conn: sqlite3.Connection, books: int) -> dict[str, Any]:
         row = conn.execute("SELECT MIN(id) AS lo, MAX(id) AS hi FROM books").fetchone()
         min_id, max_id = row["lo"], row["hi"]
         if books == 0:
@@ -332,7 +333,7 @@ class SqliteReader:
         }
 
     @staticmethod
-    def _stats_formats(conn: sqlite3.Connection) -> dict:
+    def _stats_formats(conn: sqlite3.Connection) -> dict[str, Any]:
         rows = conn.execute(
             "SELECT format, COUNT(*) AS n FROM data GROUP BY format "
             "ORDER BY n DESC, format ASC"
@@ -340,7 +341,7 @@ class SqliteReader:
         return {r["format"]: r["n"] for r in rows}
 
     @staticmethod
-    def _stats_languages(conn: sqlite3.Connection, books: int) -> dict:
+    def _stats_languages(conn: sqlite3.Connection, books: int) -> dict[str, Any]:
         rows = conn.execute(
             "SELECT lg.lang_code AS lang_code, COUNT(*) AS n "
             "FROM books_languages_link l JOIN languages lg ON lg.id = l.lang_code "
@@ -354,7 +355,7 @@ class SqliteReader:
         return languages
 
     @staticmethod
-    def _stats_completeness(conn: sqlite3.Connection, books: int) -> dict:
+    def _stats_completeness(conn: sqlite3.Connection, books: int) -> dict[str, Any]:
         def pct(filled: int) -> float:
             return round(100 * filled / books, 1) if books else 0.0
 
@@ -391,7 +392,7 @@ class SqliteReader:
         }
 
     @staticmethod
-    def _stats_identifier_types(conn: sqlite3.Connection) -> dict:
+    def _stats_identifier_types(conn: sqlite3.Connection) -> dict[str, Any]:
         rows = conn.execute(
             "SELECT type, COUNT(*) AS n FROM identifiers GROUP BY type "
             "ORDER BY n DESC, type ASC"
@@ -399,7 +400,7 @@ class SqliteReader:
         return {r["type"]: r["n"] for r in rows}
 
     @staticmethod
-    def _stats_authors(conn: sqlite3.Connection) -> dict:
+    def _stats_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         distinct = conn.execute(
             "SELECT COUNT(DISTINCT author) AS n FROM books_authors_link"
         ).fetchone()["n"]
@@ -414,7 +415,7 @@ class SqliteReader:
         }
 
     @staticmethod
-    def _stats_tags(conn: sqlite3.Connection) -> dict:
+    def _stats_tags(conn: sqlite3.Connection) -> dict[str, Any]:
         distinct = conn.execute(
             "SELECT COUNT(DISTINCT tag) AS n FROM books_tags_link"
         ).fetchone()["n"]
@@ -429,7 +430,7 @@ class SqliteReader:
         }
 
     @staticmethod
-    def _stats_data_quality(conn: sqlite3.Connection) -> dict:
+    def _stats_data_quality(conn: sqlite3.Connection) -> dict[str, Any]:
         unknown_author_books = conn.execute(
             "SELECT COUNT(DISTINCT l.book) AS n FROM books_authors_link l "
             "JOIN authors a ON a.id = l.author WHERE a.name = 'Unknown'"

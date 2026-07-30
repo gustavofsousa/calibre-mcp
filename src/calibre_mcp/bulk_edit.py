@@ -14,6 +14,8 @@ surfaces in the re-read, not here.
 
 from __future__ import annotations
 
+from typing import Any
+
 # List-valued editable fields a ``list_mode`` can apply to — the fields
 # ``calibredb set_metadata`` comma-joins (design §Components).
 LIST_FIELDS = frozenset({"authors", "tags", "languages"})
@@ -40,7 +42,9 @@ def apply_list_mode(current: list[str], supplied: list[str], mode: str) -> list[
     return list(supplied)
 
 
-def resolve_fields(current: object, fields: dict, mode: str) -> dict:
+def resolve_fields(
+    current: object, fields: dict[str, Any], mode: str
+) -> dict[str, Any]:
     """Return the exact field map to write for one book under ``mode``.
 
     List fields (``LIST_FIELDS``) under a non-``replace`` mode are resolved
@@ -52,7 +56,7 @@ def resolve_fields(current: object, fields: dict, mode: str) -> dict:
     if mode == "replace":
         return dict(fields)
 
-    resolved: dict = {}
+    resolved: dict[str, Any] = {}
     for name, value in fields.items():
         if name in LIST_FIELDS:
             existing = getattr(current, name, None) or []

@@ -20,10 +20,11 @@ integration/e2e tests to actually exercise the write path — see
 
 ```bash
 uv run ruff check src tests   # lint — must be clean
+uv run mypy                   # strict type-check (src) — must be clean
 uv run pytest                 # full suite — must be green
 ```
 
-CI runs the same two commands on every push/PR; a red CI run blocks merge.
+CI runs the same three commands on every push/PR; a red CI run blocks merge.
 
 ## Invariants a PR must not break
 

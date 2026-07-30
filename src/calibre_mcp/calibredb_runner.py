@@ -13,6 +13,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .errors import (
     CalibredbError,
@@ -92,7 +93,7 @@ class CalibredbRunner:
             return []
         return [int(piece) for piece in out.split(",") if piece.strip()]
 
-    def set_metadata(self, book_id: int, fields: dict) -> None:
+    def set_metadata(self, book_id: int, fields: dict[str, Any]) -> None:
         """Apply ``fields`` via one ``--field`` per pair (EDIT-02).
 
         List-valued fields (authors/tags/languages) are comma-joined as Calibre

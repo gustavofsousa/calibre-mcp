@@ -21,6 +21,7 @@ packages = ["src/calibre_mcp"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [tool.pytest.ini_options]
@@ -37,3 +38,20 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+# The mcp SDK ships partial stubs; don't fail the whole check on its internals.
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+# FastMCP reads each @mcp.tool()/@mcp.resource() return annotation to shape the
+# wire response: a bare `dict` serializes to a single TextContent (the shipped
+# contract), while `dict[str, Any]` flips it to structured content — an
+# outward-facing change. So the tool signatures here stay bare `dict` on
+# purpose; exempt only this module from disallow_any_generics.
+[[tool.mypy.overrides]]
+module = "calibre_mcp.server"
+disallow_any_generics = false

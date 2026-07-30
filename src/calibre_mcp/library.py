@@ -12,6 +12,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from .backup import backup_metadata_db, trash_book_files
 from .bulk_edit import LIST_FIELDS, LIST_MODES, resolve_fields
@@ -109,7 +110,7 @@ class CalibreLibrary:
         (VIEW-01/02) and ``InvalidInputError`` for a non-int id (VIEW-03)."""
         return self._reader.get_book(book_id)
 
-    def find_duplicates(self) -> dict:
+    def find_duplicates(self) -> dict[str, Any]:
         """Return groups of likely-duplicate books, advisory only (ORG-01).
 
         Pure read (no subprocess, lock-independent); never mutates and never
@@ -122,7 +123,7 @@ class CalibreLibrary:
             "groups": [self._shape_duplicate_group(group) for group in groups],
         }
 
-    def library_stats(self) -> dict:
+    def library_stats(self) -> dict[str, Any]:
         """Return the aggregate baseline profile of the library (STATS-01).
 
         Pure read (no subprocess, lock-independent). Composes the reader's
@@ -137,7 +138,7 @@ class CalibreLibrary:
         ]
         return {**stats, "data_quality_flags": data_quality_flags}
 
-    def convert_book(self, book_id: int, target_format: str) -> dict:
+    def convert_book(self, book_id: int, target_format: str) -> dict[str, Any]:
         """Convert a book to ``target_format``, keeping the existing format(s)
         (CONV-01, AD-011, AD-016).
 
@@ -185,9 +186,9 @@ class CalibreLibrary:
     def update_metadata(
         self,
         book_id: int,
-        fields: dict,
+        fields: dict[str, Any],
         token: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Edit a book's metadata via the plan->confirm handshake (EDIT-01..07).
 
         Plan step (no token): validate the fields, confirm the book exists, and
@@ -222,10 +223,10 @@ class CalibreLibrary:
     def update_metadata_bulk(
         self,
         book_ids: list[int],
-        fields: dict,
+        fields: dict[str, Any],
         list_mode: str = "replace",
         token: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Broadcast ``fields`` to N books via the plan->confirm handshake
         (BEDIT-01..09).
 
@@ -259,8 +260,8 @@ class CalibreLibrary:
             self._config.db_path, self._config.backup_root
         )
 
-        applied: list[dict] = []
-        failed: list[dict] = []
+        applied: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
         for book_id in ordered_ids:
             try:
                 book = self._reader.get_book(book_id)
@@ -284,7 +285,7 @@ class CalibreLibrary:
             "backup": str(backup),
         }
 
-    def add_book(self, path: str | Path) -> dict:
+    def add_book(self, path: str | Path) -> dict[str, Any]:
         """Import an ebook file by path (ADD-01..04).
 
         Validates the path is an existing file BEFORE any subprocess (ADD-02),
@@ -306,6 +307,11 @@ class CalibreLibrary:
                 "duplicate": True,
                 "backup": str(backup),
             }
+        if result.book_id is None:
+            # Unreachable by construction (CalibredbRunner.add raises when it can
+            # parse neither an id nor a duplicate); the guard keeps the state
+            # impossible explicit instead of passing None to get_book.
+            raise InvalidInputError("calibredb add returned no book id")
         return {
             "status": "added",
             "book_id": result.book_id,
@@ -314,7 +320,7 @@ class CalibreLibrary:
             "backup": str(backup),
         }
 
-    def remove_book(self, book_id: int, token: str | None = None) -> dict:
+    def remove_book(self, book_id: int, token: str | None = None) -> dict[str, Any]:
         """Remove a book via the review->confirm handshake (REM-01..05).
 
         Review step (no token): confirm the book exists and return its details
@@ -366,7 +372,7 @@ class CalibreLibrary:
         recipient: str,
         format: str | None = None,  # noqa: A002 - matches design/spec param name
         token: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Email a book's file via the plan->confirm handshake (EMAIL-01, AD-012).
 
         Outward-facing, so it is gated like ``update_metadata``/``remove_book``.
@@ -446,7 +452,9 @@ class CalibreLibrary:
             raise InvalidInputError(f"invalid recipient email address: {recipient!r}")
 
     @staticmethod
-    def _validate_bulk_input(book_ids: list, fields: dict, list_mode: str) -> None:
+    def _validate_bulk_input(
+        book_ids: list[int], fields: dict[str, Any], list_mode: str
+    ) -> None:
         """Reject invalid bulk input before any token/backup/write (BEDIT-06).
 
         Checks, in order: ``list_mode`` is one of ``LIST_MODES``; ``book_ids``
@@ -484,7 +492,9 @@ class CalibreLibrary:
                 f"fields ({sorted(LIST_FIELDS)}); got {sorted(fields)}"
             )
 
-    def _bulk_plan_entry(self, book_id: int, fields: dict, list_mode: str) -> dict:
+    def _bulk_plan_entry(
+        self, book_id: int, fields: dict[str, Any], list_mode: str
+    ) -> dict[str, Any]:
         """Build one book's plan row (BEDIT-01, BEDIT-08 AC-4).
 
         A vanished id is reported ``found: False`` (no diff, no abort — it
@@ -504,7 +514,7 @@ class CalibreLibrary:
         }
 
     @staticmethod
-    def _validate_edit_fields(fields: dict) -> None:
+    def _validate_edit_fields(fields: dict[str, Any]) -> None:
         """Reject fields outside the whitelist (EDIT-04) and bad values (EDIT-07)."""
         unknown = set(fields) - ALLOWED_EDIT_FIELDS
         if unknown:
@@ -531,7 +541,7 @@ class CalibreLibrary:
                 )
 
     @staticmethod
-    def _shape_duplicate_group(group: list[Book]) -> dict:
+    def _shape_duplicate_group(group: list[Book]) -> dict[str, Any]:
         """Shape one duplicate group for output (ORG-01)."""
         primary_author = group[0].authors[0] if group[0].authors else ""
         return {
@@ -548,7 +558,7 @@ class CalibreLibrary:
         }
 
     @staticmethod
-    def _build_diff(book: Book, fields: dict) -> dict:
+    def _build_diff(book: Book, fields: dict[str, Any]) -> dict[str, Any]:
         """Build a per-field current->proposed diff for the plan (EDIT-01)."""
         return {
             name: {"current": getattr(book, name), "proposed": value}
