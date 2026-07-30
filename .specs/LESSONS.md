@@ -44,6 +44,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: spec.md Edge Cases (unset bucket, multiple duplicate groups, real_pubdate), .specs/features/library-stats/validation.md (spec-driven-tests)
 - last seen: 2026-07-20T17:20:25Z
 
+### L-006 — Before extracting a shared side-effecting core, check existing tests for assertions on side-effect ORDER (e.g. 'no backup on a failed convert') stricter than the spec AC — reusing one core across callers can force a new ordering; reconcile against the AC and get sign-off before editing the over-specified assertion.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `src/calibre_mcp/library.py:convert` · harmful: 0
+- features: bulk-convert
+- evidence: tests/integration/test_library_p2.py::test_convert_book_bogus_source_surfaces_error_and_adds_nothing (src/calibre_mcp/library.py:convert)
+- last seen: 2026-07-30T21:44:18Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.
