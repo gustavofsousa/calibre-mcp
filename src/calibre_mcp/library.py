@@ -34,6 +34,11 @@ EMAIL_FORMAT_PREFERENCE = ("EPUB", "AZW3", "MOBI", "PDF")
 # default and the ceiling; ``offset`` is exposed for paging past it.
 DEFAULT_LIMIT = 50
 
+# BCONV-06: a bulk convert is a sequence of subprocesses (300 s per-book
+# timeout); cap the batch so an accidental "convert everything" can't run for
+# an hour. Rejected as invalid input before any backup/convert.
+BULK_CONVERT_MAX = 50
+
 # The curation fields ``calibredb set_metadata`` supports (design §Data Models).
 # The facade validates every edit against this set before planning a change.
 ALLOWED_EDIT_FIELDS = {
@@ -199,6 +204,87 @@ class CalibreLibrary:
         with tempfile.TemporaryDirectory() as out_dir:
             converted = self._converter.convert(Path(source), target, Path(out_dir))
             self._runner.add_format(book_id, converted)
+
+    def convert_book_bulk(
+        self, book_ids: list[int], target_format: str
+    ) -> dict[str, Any]:
+        """Convert N books to one ``target_format`` — additive, best-effort
+        three-bucket (BCONV-01..06).
+
+        Additive/no-token (AD-016): one ``metadata.db`` backup before the loop
+        as the single rollback point (AD-011, unconditional even if every book
+        is skipped), then each book in ``sorted(book_ids)`` lands in exactly one
+        bucket — ``converted`` (re-read resulting formats, BCONV-04),
+        ``skipped`` (benign no-op: already has the format / no source,
+        BCONV-03), or ``failed`` (real per-book error, BCONV-02). A per-book
+        failure never aborts the batch and never reports a fake "all succeeded";
+        ``len(converted)+len(skipped)+len(failed) == len(book_ids)`` (BCONV-05).
+        """
+        target = self._validate_bulk_convert_input(book_ids, target_format)
+        backup = backup_metadata_db(  # BCONV-01: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        converted: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for book_id in sorted(book_ids):
+            try:
+                book = self._reader.get_book(book_id)  # vanished -> failed
+                kind, info = self._classify_convert(book, target)
+                if kind == "skip":  # BCONV-03: benign no-op, not a failure
+                    skipped.append({"book_id": book_id, "reason": info})
+                    continue
+                self._convert_and_attach(book_id, target, info)
+                reread = self._reader.get_book(book_id)  # BCONV-04: demonstrate
+                converted.append({"book_id": book_id, "formats": reread.formats})
+            except CalibreMcpError as exc:  # BCONV-02: never aborts the batch
+                failed.append({"book_id": book_id, "error": str(exc)})
+
+        return {
+            "status": "converted",
+            "target_format": target,
+            "converted": converted,
+            "skipped": skipped,
+            "failed": failed,
+            "backup": str(backup),
+        }
+
+    @staticmethod
+    def _validate_bulk_convert_input(
+        book_ids: list[int], target_format: str
+    ) -> str:
+        """Reject invalid bulk-convert input before any backup/convert (BCONV-06).
+
+        Checks, in order: ``target_format`` (lowercased) is a supported convert
+        target; ``book_ids`` is non-empty, every element a non-bool ``int``, no
+        duplicates, and ``len <= BULK_CONVERT_MAX``. Returns the normalized
+        (lowercased) target so the caller converts against the canonical value.
+        """
+        target = target_format.lower()
+        if target not in SUPPORTED_CONVERT_FORMATS:
+            allowed = ", ".join(SUPPORTED_CONVERT_FORMATS)
+            raise InvalidInputError(
+                f"unsupported target format {target_format!r}; allowed: {allowed}"
+            )
+
+        if not book_ids:
+            raise InvalidInputError("book_ids must not be empty")
+        if any(
+            isinstance(book_id, bool) or not isinstance(book_id, int)
+            for book_id in book_ids
+        ):
+            raise InvalidInputError(f"book_ids must all be integers, got {book_ids!r}")
+        if len(set(book_ids)) != len(book_ids):
+            raise InvalidInputError(
+                f"book_ids must not contain duplicates: {book_ids!r}"
+            )
+        if len(book_ids) > BULK_CONVERT_MAX:
+            raise InvalidInputError(
+                f"too many book_ids: {len(book_ids)} exceeds the "
+                f"{BULK_CONVERT_MAX}-book bulk convert cap"
+            )
+        return target
 
     # -- mutations (plan -> confirm, backup-before-write) ------------------
 
