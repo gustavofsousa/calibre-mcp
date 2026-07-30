@@ -232,8 +232,12 @@ def test_convert_book_bogus_source_surfaces_error_and_adds_nothing(
     with pytest.raises(EbookConvertError):
         facade.convert_book(book_id, "pdf")
 
+    # CONV-01 AC-5: the convert error surfaces and NOTHING is added (add_format
+    # never ran). The backup is taken before the (failed) convert now that the
+    # single tool shares the bulk convert core — a pre-convert snapshot is
+    # harmless under AD-011 rolling retention; AC-5 only requires "adds nothing".
     assert facade.get_book(book_id).formats == book.formats  # nothing added
-    assert _snapshots(backup_root) == []  # no add_format ran, no backup taken
+    assert len(_snapshots(backup_root)) == 1  # backup-before-convert (shared core)
 
 
 @pytest.mark.integration
@@ -247,6 +251,55 @@ def test_convert_book_unsupported_target_format_rejected(
         facade.convert_book(book_id, "bogus")
 
     assert "bogus" in str(excinfo.value)
+
+
+# ------------------------------------------------------- _classify_convert core
+# BULK-02 T1: the shared convert core. _classify_convert returns a skip reason as
+# DATA (not an exception) for benign no-ops, else ("ready", source_path) — the
+# split that lets the bulk loop route skips vs failures without parsing errors.
+
+
+@pytest.mark.integration
+def test_classify_convert_ready_returns_source_path(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+):
+    # Ready outcome: a convertible book -> ("ready", the resolved source path).
+    book_id = _seed_book(scratch_library, tmp_path)
+    book = facade.get_book(book_id)
+
+    kind, info = facade._classify_convert(book, "pdf")
+
+    assert kind == "ready"
+    assert info == str(facade._reader.format_files(book_id)["EPUB"])
+
+
+@pytest.mark.integration
+def test_classify_convert_already_has_target_is_skip_naming_format(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+):
+    # Skip outcome (already has target): reason names the format, no exception.
+    book_id = _seed_book(scratch_library, tmp_path)
+    book = facade.get_book(book_id)
+
+    kind, reason = facade._classify_convert(book, "epub")
+
+    assert kind == "skip"
+    assert "EPUB" in reason
+
+
+@pytest.mark.integration
+def test_classify_convert_no_source_is_skip(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path, monkeypatch
+):
+    # Skip outcome (no source file): benign no-op reason, no exception.
+    book_id = _seed_book(scratch_library, tmp_path)
+    book = facade.get_book(book_id)
+    monkeypatch.setattr(facade._reader, "format_files", lambda _id: {})
+
+    kind, reason = facade._classify_convert(book, "pdf")
+
+    assert kind == "skip"
+    assert "no file to convert from" in reason
 
 
 # ----------------------------------------------------------------- email_book

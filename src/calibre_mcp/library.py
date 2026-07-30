@@ -142,10 +142,11 @@ class CalibreLibrary:
         """Convert a book to ``target_format``, keeping the existing format(s)
         (CONV-01, AD-011, AD-016).
 
-        Additive, single-step (like ``add_book``): refuses if ``target_format``
-        already exists on the book rather than a confirm gate. Converts into a
-        temp dir (cleaned up even on failure), backs up ``metadata.db`` BEFORE
-        ``add_format``, then re-reads and returns the book with both formats.
+        Additive, single-step (like ``add_book``): refuses (``InvalidInputError``)
+        if ``target_format`` already exists on the book or the book has no source
+        file, rather than a confirm gate. Backs up ``metadata.db`` BEFORE
+        ``add_format`` (AD-011), converts additively via the shared convert core,
+        then re-reads and returns the book with both formats.
         """
         target = target_format.lower()
         if target not in SUPPORTED_CONVERT_FORMATS:
@@ -155,31 +156,49 @@ class CalibreLibrary:
             )
 
         book = self._reader.get_book(book_id)  # exists-precheck, no write
-        if target.upper() in book.formats:
-            raise InvalidInputError(
-                f"book {book_id} already has format {target.upper()}; nothing to do"
-            )
+        kind, info = self._classify_convert(book, target)
+        if kind == "skip":  # AC-3/AC-4: already-has-format or no source -> refuse
+            raise InvalidInputError(f"book {book_id} {info}; nothing to do")
 
-        source_files = self._reader.format_files(book_id)  # AC-4 precheck
-        if not source_files:
-            raise InvalidInputError(f"book {book_id} has no file to convert from")
-        source = next(iter(source_files.values()))
-
-        with tempfile.TemporaryDirectory() as out_dir:
-            converted = self._converter.convert(  # AC-5 failure propagates, no write
-                source, target, Path(out_dir)
-            )
-            backup = backup_metadata_db(  # AD-011: backup BEFORE add_format
-                self._config.db_path, self._config.backup_root
-            )
-            self._runner.add_format(book_id, converted)
-
+        backup = backup_metadata_db(  # AD-011: backup BEFORE add_format
+            self._config.db_path, self._config.backup_root
+        )
+        self._convert_and_attach(book_id, target, info)  # AC-5 failure propagates
         return {
             "status": "converted",
             "book_id": book_id,
             "book": self._reader.get_book(book_id),  # re-read: old + new formats
             "backup": str(backup),
         }
+
+    def _classify_convert(self, book: Book, target: str) -> tuple[str, str]:
+        """Classify a book for conversion to ``target`` — shared convert core.
+
+        Returns ``("skip", reason)`` when the book already has ``target`` (the
+        reason names the format) or has no source file to convert from, else
+        ``("ready", source_path)``. A skip is a RETURN VALUE, never an exception:
+        the bulk loop treats a benign no-op as data and a real failure as an
+        exception (BCONV-02/03). Raises nothing for the skip cases.
+        """
+        if target.upper() in book.formats:
+            return ("skip", f"already has format {target.upper()}")
+        source_files = self._reader.format_files(book.id)  # AD-017
+        if not source_files:
+            return ("skip", "has no file to convert from")
+        return ("ready", str(next(iter(source_files.values()))))
+
+    def _convert_and_attach(self, book_id: int, target: str, source: str) -> None:
+        """Convert ``source`` to ``target`` and attach it additively — shared core.
+
+        Converts into a ``TemporaryDirectory`` (cleaned up even on failure) via
+        ``EbookConvertRunner`` then ``CalibredbRunner.add_format``. Raises
+        ``EbookConvertError`` / ``CalibredbError`` on real failure. Does NOT back
+        up — the caller owns the one backup (single tool: before this call; bulk:
+        once before the loop).
+        """
+        with tempfile.TemporaryDirectory() as out_dir:
+            converted = self._converter.convert(Path(source), target, Path(out_dir))
+            self._runner.add_format(book_id, converted)
 
     # -- mutations (plan -> confirm, backup-before-write) ------------------
 
