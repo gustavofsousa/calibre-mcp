@@ -491,6 +491,88 @@ def test_convert_book_description_states_additive():
     assert "refuse" in text
 
 
+# --------------------------------------------------------------- BULK CONVERT
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_additive_round_trip(two_seeded: list[int]):
+    # BCONV-01/04: broadcast convert to PDF; both books read back EPUB+PDF
+    # (additive) and appear in ``converted`` with their re-read formats.
+    result = _call(
+        "convert_book_bulk", {"book_ids": two_seeded, "target_format": "pdf"}
+    )
+
+    assert result["status"] == "converted"
+    assert {c["book_id"] for c in result["converted"]} == set(two_seeded)
+    for book_id in two_seeded:
+        assert set(_call("get_book", {"book_id": book_id})["formats"]) == {
+            "EPUB",
+            "PDF",
+        }
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_mixed_batch_returns_three_buckets(two_seeded: list[int]):
+    # BCONV-02/03: a book already having the target -> skipped, a missing id ->
+    # failed, and a third book -> converted; all three buckets routed correctly.
+    already = two_seeded[0]
+    _call("convert_book", {"book_id": already, "target_format": "pdf"})  # EPUB+PDF
+    to_convert = two_seeded[1]
+
+    result = _call(
+        "convert_book_bulk",
+        {"book_ids": [already, to_convert, 999999], "target_format": "pdf"},
+    )
+
+    assert {c["book_id"] for c in result["converted"]} == {to_convert}
+    assert {s["book_id"] for s in result["skipped"]} == {already}
+    assert {f["book_id"] for f in result["failed"]} == {999999}
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_empty_ids_is_tool_error(env: Path):
+    # BCONV-06: empty book_ids is rejected as invalid input at the boundary.
+    with pytest.raises(ToolError) as excinfo:
+        _call("convert_book_bulk", {"book_ids": [], "target_format": "pdf"})
+
+    assert "book_ids" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_over_cap_is_tool_error(env: Path):
+    # BCONV-06: a batch over the 50-book cap surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "convert_book_bulk",
+            {"book_ids": list(range(1, 52)), "target_format": "epub"},
+        )
+
+    assert "50" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_description_documents_contract():
+    # T3 Done-when: docstring documents ADDITIVE/no-token, the 50-book cap, the
+    # three buckets, and that skipped is a benign no-op (not a failure).
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["convert_book_bulk"].description.lower()
+
+    assert "additive" in text or "keep" in text
+    assert "50" in text
+    assert "converted" in text and "skipped" in text and "failed" in text
+    assert "benign" in text  # skipped is documented as a benign no-op, not a failure
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_bulk_convert_calls(seeded: int):
+    # Design Risks: stdout is the MCP framing channel; bulk convert must stay clean.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _call("convert_book_bulk", {"book_ids": [seeded], "target_format": "pdf"})
+
+    assert buffer.getvalue() == ""
+
+
 # -------------------------------------------------------------- DUPLICATES
 
 

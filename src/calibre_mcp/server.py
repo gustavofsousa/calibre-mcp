@@ -268,6 +268,29 @@ def convert_book(book_id: int, target_format: str) -> dict:
 
 @mcp.tool()
 @_map_errors
+def convert_book_bulk(book_ids: list[int], target_format: str) -> dict:
+    """Convert many books to one ``target_format`` via ``ebook-convert`` (BULK-02).
+
+    ADDITIVE: each book keeps its existing format(s) and gains ``target_format``;
+    NO confirmation token (like ``convert_book``). Broadcasts one target to every
+    id in ``book_ids`` — max 50 per call (a larger batch is rejected as invalid
+    input). Supported targets: epub, azw3, mobi, pdf.
+
+    Best-effort, honest THREE-bucket result — every book lands in exactly one:
+    ``converted`` (with its re-read resulting ``formats``); ``skipped`` (a BENIGN
+    no-op — the book already has the target, or has no source file — this is NOT
+    a failure); or ``failed`` (a real per-book error: corrupt/unsupported source,
+    or an id that does not exist). A single book failing never aborts the batch
+    and is never reported as a fake "all succeeded"; every id is accounted for
+    (converted + skipped + failed == book_ids). Backs up ``metadata.db`` once
+    before the batch. Conversions run sequentially and can be slow for a large
+    batch.
+    """
+    return _get_library().convert_book_bulk(book_ids, target_format)
+
+
+@mcp.tool()
+@_map_errors
 def find_duplicates() -> dict:
     """Find likely-duplicate books by normalized (title, primary author) (ORG-01).
 
