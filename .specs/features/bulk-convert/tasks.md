@@ -9,7 +9,7 @@ Implement these tasks with the `spec-driven` skill: **activate it by name and fo
 ---
 
 **Design**: `.specs/features/bulk-convert/design.md`
-**Status**: Approved
+**Status**: Done — all 3 tasks committed (`c054920`/`af071ab`/`1bfb445`), Verifier PASS (`validation.md`)
 
 ---
 
@@ -84,13 +84,13 @@ T2 → T3
 - Skill: NONE
 
 **Done when**:
-- [ ] `_classify_convert(book, target)` returns `("skip", "already has <FMT>")` when `target.upper() in book.formats`, `("skip", "no source format")` when `format_files` is empty, else `("ready", source_path)`; raises nothing for skip cases
-- [ ] `_convert_and_attach(book_id, target, source)` converts into a `TemporaryDirectory` (cleaned up even on failure) and calls `add_format`; raises `EbookConvertError`/`CalibredbError` on real failure; does **no** backup (caller owns it)
-- [ ] `convert_book` refactored to use both helpers: validate target → `get_book` → `_classify_convert` → skip → `raise InvalidInputError(reason)` (preserves current single-tool contract) → else `backup_metadata_db` → `_convert_and_attach` → re-read → return the unchanged CONV-01 dict
-- [ ] The **existing CONV-01 tests pass unchanged** (behavior-preserving): `test_library_p2.py` convert cases green with no assertion edits
-- [ ] New integration cases cover `_classify_convert`'s three outcomes (ready / already-has / no-source) directly
-- [ ] Full gate passes: `uv run pytest -m "unit or integration" -q`
-- [ ] Test count: existing convert tests still pass + ≥3 new cases (no silent deletions)
+- [x] `_classify_convert(book, target)` returns `("skip", "already has <FMT>")` when `target.upper() in book.formats`, `("skip", "no source format")` when `format_files` is empty, else `("ready", source_path)`; raises nothing for skip cases
+- [x] `_convert_and_attach(book_id, target, source)` converts into a `TemporaryDirectory` (cleaned up even on failure) and calls `add_format`; raises `EbookConvertError`/`CalibredbError` on real failure; does **no** backup (caller owns it)
+- [x] `convert_book` refactored to use both helpers: validate target → `get_book` → `_classify_convert` → skip → `raise InvalidInputError(reason)` (preserves current single-tool contract) → else `backup_metadata_db` → `_convert_and_attach` → re-read → return the unchanged CONV-01 dict
+- [x] The **existing CONV-01 tests pass unchanged** (behavior-preserving): `test_library_p2.py` convert cases green with no assertion edits
+- [x] New integration cases cover `_classify_convert`'s three outcomes (ready / already-has / no-source) directly
+- [x] Full gate passes: `uv run pytest -m "unit or integration" -q`
+- [x] Test count: existing convert tests still pass + ≥3 new cases (no silent deletions)
 
 **Tests**: integration
 **Gate**: full
@@ -111,13 +111,13 @@ T2 → T3
 - Skill: NONE
 
 **Done when**:
-- [ ] `_validate_bulk_convert_input(book_ids, target_format)` rejects (before any backup/convert): unsupported target (after `.lower()`); empty/duplicate/non-int (incl. `bool`) `book_ids`; `len(book_ids) > 50` — returns the normalized target (BCONV-06)
-- [ ] One `backup_metadata_db` **before** the loop, returned as `backup` (unconditional, even if all-skipped) (BCONV-01)
-- [ ] Loop over `sorted(book_ids)`: `get_book` → `_classify_convert` → skip → `skipped[{book_id, reason}]`; ready → `_convert_and_attach` → re-read → `converted[{book_id, formats}]`; any `CalibreMcpError` → `failed[{book_id, error}]` and continue (BCONV-02, BCONV-03, BCONV-04)
-- [ ] Returns `status:"converted"`, `target_format`, `converted`, `skipped`, `failed`, `backup`; invariant `len(converted)+len(skipped)+len(failed)==len(book_ids)` holds (BCONV-05)
-- [ ] Integration tests (scratch library w/ convertible source, assert read-back) cover: all-succeed batch preserves existing format + adds target + exactly one backup + 3 `converted` entries (Independent Test 1); mixed batch — already-has-target → `skipped`, missing id → `failed`, remaining id → `converted` (Independent Test 2); single-id degenerate batch; all-skipped batch (empty converted/failed, backup still present); no-source book → `skipped`; invariant assertion on the mixed batch; every BCONV-06 case — bad target, empty ids, duplicate id, non-int id, 51 rejected / 50 accepted
-- [ ] Full gate passes: `uv run pytest -m "unit or integration" -q`
-- [ ] Test count: ≥12 integration tests pass (no silent deletions)
+- [x] `_validate_bulk_convert_input(book_ids, target_format)` rejects (before any backup/convert): unsupported target (after `.lower()`); empty/duplicate/non-int (incl. `bool`) `book_ids`; `len(book_ids) > 50` — returns the normalized target (BCONV-06)
+- [x] One `backup_metadata_db` **before** the loop, returned as `backup` (unconditional, even if all-skipped) (BCONV-01)
+- [x] Loop over `sorted(book_ids)`: `get_book` → `_classify_convert` → skip → `skipped[{book_id, reason}]`; ready → `_convert_and_attach` → re-read → `converted[{book_id, formats}]`; any `CalibreMcpError` → `failed[{book_id, error}]` and continue (BCONV-02, BCONV-03, BCONV-04)
+- [x] Returns `status:"converted"`, `target_format`, `converted`, `skipped`, `failed`, `backup`; invariant `len(converted)+len(skipped)+len(failed)==len(book_ids)` holds (BCONV-05)
+- [x] Integration tests (scratch library w/ convertible source, assert read-back) cover: all-succeed batch preserves existing format + adds target + exactly one backup + 3 `converted` entries (Independent Test 1); mixed batch — already-has-target → `skipped`, missing id → `failed`, remaining id → `converted` (Independent Test 2); single-id degenerate batch; all-skipped batch (empty converted/failed, backup still present); no-source book → `skipped`; invariant assertion on the mixed batch; every BCONV-06 case — bad target, empty ids, duplicate id, non-int id, 51 rejected / 50 accepted
+- [x] Full gate passes: `uv run pytest -m "unit or integration" -q`
+- [x] Test count: ≥12 integration tests pass (no silent deletions)
 
 **Tests**: integration
 **Gate**: full
@@ -138,11 +138,11 @@ T2 → T3
 - Skill: NONE
 
 **Done when**:
-- [ ] `convert_book_bulk(book_ids, target_format)` delegates to the facade and returns its JSON-friendly dict (ids + format strings)
-- [ ] Docstring: ADDITIVE (keeps existing formats), no confirmation token; documents the 50-book cap, the three buckets, and that `skipped` (already-has-format / no-source) is a benign no-op — not a failure; notes conversions are sequential and can be slow
-- [ ] E2E tests (through `server.mcp.call_tool`): additive convert round-trip against scratch library asserts read-back (target present, original kept); a mixed batch returns all three buckets with correct routing; invalid input (bad target OR over-cap OR empty ids) surfaces a `ToolError`; stdout stays clean (new tool included in the stdout-hygiene assertion)
-- [ ] Build gate passes: `uv run ruff check . && uv run pytest -q`
-- [ ] Test count: ≥3 new e2e tests pass; full suite green (no silent deletions)
+- [x] `convert_book_bulk(book_ids, target_format)` delegates to the facade and returns its JSON-friendly dict (ids + format strings)
+- [x] Docstring: ADDITIVE (keeps existing formats), no confirmation token; documents the 50-book cap, the three buckets, and that `skipped` (already-has-format / no-source) is a benign no-op — not a failure; notes conversions are sequential and can be slow
+- [x] E2E tests (through `server.mcp.call_tool`): additive convert round-trip against scratch library asserts read-back (target present, original kept); a mixed batch returns all three buckets with correct routing; invalid input (bad target OR over-cap OR empty ids) surfaces a `ToolError`; stdout stays clean (new tool included in the stdout-hygiene assertion)
+- [x] Build gate passes: `uv run ruff check . && uv run pytest -q`
+- [x] Test count: ≥3 new e2e tests pass; full suite green (no silent deletions)
 
 **Tests**: e2e
 **Gate**: build

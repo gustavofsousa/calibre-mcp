@@ -106,8 +106,8 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 
 ## Handoff
 
-- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 BULK-01 — all
-  committed with independent-Verifier PASS reports.
+- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 BULK-01 + BULK-02 —
+  all committed with independent-Verifier PASS reports.
   - **P1 / P2** (`calibre-management`, `calibre-management-p2`): read + curate + convert +
     find_duplicates + email. `SqliteReader` constructor takes `(db_path, library_path)`.
   - **STATS-01** (`library-stats`, Phase 1): `calibre://library/stats` MCP resource (Option A,
@@ -118,13 +118,16 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
     via one batch plan→confirm token + one backup + best-effort per-book `applied`/`failed`, with
     `list_mode` add/remove/replace for list fields (new pure `bulk_edit.py`). Verifier PASS
     (`.specs/features/bulk-metadata-edit/validation.md`). Established the AD-020 multi-book pattern.
-- **In progress — BULK-02 (`bulk-convert`, Phase 2):** spec + context + design + tasks drafted this
-  session (`.specs/features/bulk-convert/`), **awaiting approval to Execute**. `convert_book_bulk`:
-  broadcast one `target_format` to N books, additive/no-token (AD-016), one backup before the batch,
-  best-effort **three-bucket** result `converted`/`skipped`/`failed` (AD-020). Two user decisions
-  baked in: separate `skipped[]` bucket for benign no-ops (already-has-format / no-source), and a
-  **50-book cap** rejected as invalid input. 3 tasks: T1 extract shared convert core (refactor
-  `convert_book`, CONV-01 contract preserved) → T2 `convert_book_bulk` facade → T3 MCP tool.
+  - **BULK-02** (`bulk-convert`, Phase 2): `convert_book_bulk` — broadcast one `target_format` to N
+    books, additive/no-token (AD-016), one `metadata.db` backup before the batch, best-effort
+    **three-bucket** result `converted`/`skipped`/`failed` (AD-020, adds `skipped` for benign
+    no-ops). 50-book cap rejected as invalid input; duplicate/non-int/bool ids rejected pre-backup.
+    Refactor extracted a shared convert core (`_classify_convert` = skip-as-data / `_convert_and_attach`
+    = convert+add_format) reused by the single `convert_book`. Verifier PASS (3/3 mutants killed),
+    `.specs/features/bulk-convert/validation.md`. Commits `c054920`/`af071ab`/`1bfb445`. One
+    user-approved decision: single `convert_book` now backs up *before* the shared convert (unifying
+    with the bulk one-backup order); its CONV-01 bogus-source assertion was aligned to spec AC-5
+    (a pre-convert snapshot is harmless under AD-011). Full suite: 211 passed; mypy + ruff clean.
 - **Next Phase-2 targets after BULK-02:** BULK-03 (folder import), ORGN-01/02/03 (author/tag rename,
   duplicate merge) — not yet spec'd. Full roadmap in `.specs/ROADMAP.md`.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),

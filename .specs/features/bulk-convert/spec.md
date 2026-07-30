@@ -127,18 +127,19 @@ and the remaining id still converts.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| BCONV-01 | P1: Broadcast bulk convert | Design | In Design |
-| BCONV-02 | P1: Broadcast bulk convert | Design | In Design |
-| BCONV-03 | P1: Broadcast bulk convert | Design | In Design |
-| BCONV-04 | P1: Broadcast bulk convert | Design | In Design |
-| BCONV-05 | P1: Broadcast bulk convert | Design | In Design |
-| BCONV-06 | P1: Broadcast bulk convert | Design | In Design |
+| BCONV-01 | P1: Broadcast bulk convert | T1, T2, T3 | Verified |
+| BCONV-02 | P1: Broadcast bulk convert | T2, T3 | Verified |
+| BCONV-03 | P1: Broadcast bulk convert | T1, T2, T3 | Verified |
+| BCONV-04 | P1: Broadcast bulk convert | T1, T2 | Verified |
+| BCONV-05 | P1: Broadcast bulk convert | T2 | Verified |
+| BCONV-06 | P1: Broadcast bulk convert | T2, T3 | Verified |
 
 **ID format:** `BCONV-[NUMBER]`.
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 6 total, 0 mapped to tasks yet (Tasks phase pending), 0 unmapped.
+**Coverage:** 6 total, all 6 mapped to tasks and Verified (validation.md PASS, commits
+`c054920`/`af071ab`/`1bfb445`), 0 unmapped.
 
 ---
 
