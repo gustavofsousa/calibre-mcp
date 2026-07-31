@@ -128,10 +128,29 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   single-library model (AD-007). The productize-the-pattern and vertical-that-pays bets (Phases B/C)
   are strategy, recorded in the roadmap's Strategic Horizon, not committed calibre-mcp features.
 
+- **AD-024 — A tool may return MCP image content; the read layer resolves the path, FastMCP reads
+  the bytes.** Established by COVER-01 (`read_cover`), the project's first non-text tool result.
+  The read layer resolves and validates the file path (same `is_file()` discipline as
+  `format_files`, AD-017); `FastMCP.Image(path=...)` performs the byte read + base64 encode — our
+  code never reads image bytes, so no new I/O kind enters the facade/tool and the
+  reads-go-through-the-read-layer invariant holds. `_map_errors` is now generic (`Callable[..., T]
+  -> Callable[..., T]`, PEP 695 syntax) so a non-`dict` tool result typechecks; every existing
+  dict-returning tool is unaffected (pure typing change). **SPEC_DEVIATION from design.md:** the
+  design specified the tool's return annotation as `Image | dict`, but the installed mcp SDK
+  (1.28.1) crashes at tool *registration* on that annotation — building the union's
+  structured-output schema calls `pydantic.create_model()` unconditionally (even under
+  `structured_output=False`), and pydantic has no schema for `Image` (`PydanticSchemaGenerationError`).
+  `read_cover` is annotated `-> Any` instead; verified empirically that this produces the identical
+  runtime wire behavior (FastMCP's content conversion dispatches on the actual returned value's
+  type, not the static annotation) and the same `output_schema = None` either way — so the intended
+  contract (image content on has-cover, structured dict on no-cover) is unchanged, only the
+  annotation differs from the design doc. Future non-text tool results should default straight to
+  `-> Any` rather than a real `Image | dict` union.
+
 ## Backlog — deferred (post-P2)
 
-- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03 all shipped & Verified;
-  see Handoff. Next up is Phase 3 (Covers & Enrichment) — see `.specs/ROADMAP.md`.)
+- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03/04 all shipped & Verified;
+  see Handoff. Phase 3 (Covers & Enrichment) now underway — see `.specs/ROADMAP.md`.)
 
 ## Environment
 
@@ -142,10 +161,10 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 ## Handoff
 
 - **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 in full — BULK-01 +
-  BULK-02 + BULK-03 + ORGN-01 + ORGN-02 + ORGN-03 — all committed with independent-Verifier PASS
-  reports. **Phase 2 phase-gate is closed** (2026-07-31): a full curation session (retag a batch,
-  fix an author's name everywhere, resolve a duplicate group, import a folder) never requires the
-  Calibre GUI.
+  BULK-02 + BULK-03 + ORGN-01 + ORGN-02 + ORGN-03 + ORGN-04 — all committed with
+  independent-Verifier PASS reports. **Phase 2 phase-gate is closed** (2026-07-31): a full curation
+  session (retag a batch, fix an author's name everywhere, resolve a duplicate group, import a
+  folder, fix a series' name) never requires the Calibre GUI.
   - **P1 / P2** (`calibre-management`, `calibre-management-p2`): read + curate + convert +
     find_duplicates + email. `SqliteReader` constructor takes `(db_path, library_path)`.
   - **STATS-01** (`library-stats`, Phase 1): `calibre://library/stats` MCP resource (Option A,
@@ -201,25 +220,38 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
     runs, author 3/3 + verifier 4/4, 7/7 killed) **plus a structural code-trace** confirming the
     removal lines are unreachable except after a fully-completed attach loop — the data-safety
     ordering is a guarantee, not just a tested behavior. `.specs/features/merge-duplicate-group/validation.md`.
-- **In progress — ORGN-04** (`series-rename`, Phase 2 follow-on, closes the AD-019 author/tag/series
-  organization triad): `rename_series` — series-scoped sibling of ORGN-01/02, T1-T3 implemented
-  (`books_by_series` discovery, facade plan→confirm batch, MCP tool), all commits green
-  (ruff/mypy/pytest). **Status: Implementing, awaiting independent Verifier PASS** — T4 (this entry)
-  is the traceability closeout, not the Verified mark. Key divergence from ORGN-01/02: series is a
-  single-valued field, so there is no list resolver — the apply writes `{"series": new_series}`
-  ONLY, never `series_index`, so each book's position survives the rename (SRENAME-07, empirically
-  verified against `calibredb` and covered by a fractional-index (`7.5`) round-trip test). The real
-  library has 0 books in any series (`series_unused`), so all new tests seed a `scratch_library`
-  rather than anchoring on the real one. Spec/design/tasks at `.specs/features/series-rename/`.
-- **Next:** dispatch the independent Verifier for ORGN-04 (spec-anchored check + discrimination
-  sensor) — Execute is not done until it PASSes. After that: Phase 3 (Covers & Enrichment) — first
-  feature needing a new outbound-network AD (see ROADMAP.md's open architectural question). Full
-  roadmap in `.specs/ROADMAP.md`.
+- **ORGN-04** (`series-rename`, Phase 2 follow-on, closes the AD-019 author/tag/series organization
+  triad): `rename_series` — series-scoped sibling of ORGN-01/02 (`books_by_series` discovery, facade
+  plan→confirm batch, MCP tool). Key divergence from ORGN-01/02: series is a single-valued field, so
+  there is no list resolver — the apply writes `{"series": new_series}` ONLY, never `series_index`,
+  so each book's position survives the rename (SRENAME-07, empirically verified against `calibredb`
+  and covered by a fractional-index (`7.5`) round-trip test). The real library has 0 books in any
+  series (`series_unused`), so all tests seed a `scratch_library` rather than anchoring on the real
+  one. **Shipped & Verified** (independent Verifier PASS, 8/8 SRENAME matched spec-defined outcomes,
+  3/3 discrimination-sensor mutants killed, `.specs/features/series-rename/validation.md`,
+  commit `b4f0598`) — this Handoff entry was simply never updated after that Verified commit until
+  now (found while closing out COVER-01); Phase 2 was in fact fully closed at that point.
+- **In progress — COVER-01** (`cover-read`, Phase 3 — Covers & Metadata Enrichment): `read_cover` —
+  T1-T3 implemented (`SqliteReader.cover_file` has_cover-keyed path resolution, `CalibreLibrary
+  .read_cover` dict facade, `read_cover` MCP tool returning viewable image content), all commits
+  green (ruff/mypy/pytest). **Status: Implementing, awaiting independent Verifier PASS** — T3 (this
+  entry) is the traceability closeout, not the Verified mark. First tool to return non-text (image)
+  content — see **AD-024** (incl. a SPEC_DEVIATION: `-> Any` return annotation instead of design's
+  `Image | dict`, forced by an mcp-SDK schema-generation crash on that union, same runtime wire
+  behavior verified). Test-seeding note: a real sample `.epub`'s embedded cover gets
+  auto-extracted by `calibredb add`, so cover/no-cover fixtures seed via `calibredb add --empty` +
+  a stdlib-only zlib-PNG helper instead, for deterministic has_cover state. Spec/design/tasks at
+  `.specs/features/cover-read/`.
+- **Next:** dispatch the independent Verifier for COVER-01 (spec-anchored check + discrimination
+  sensor) — Execute is not done until it PASSes. After that: COVER-02 (`cover-set`, the mutating
+  sibling — spec/design/tasks already drafted at `.specs/features/cover-set/`, not yet executed).
+  Full roadmap in `.specs/ROADMAP.md`.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
   `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
   `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
-  Implementing). Stack: uv + pytest + ruff; test-safety rule enforced via the `scratch_library`
-  fixture (writes never touch the real library). Full build gate re-run as the T4 closeout
-  regression: 307 passed, 0 failed; mypy + ruff clean.
+  Implementing), `cover-read` (COVER-01, 5 req `RCOVER`, Implementing). Stack: uv + pytest + ruff;
+  test-safety rule enforced via the `scratch_library` fixture (writes never touch the real
+  library). Full build gate re-run as the T3 closeout regression: 318 passed, 0 failed; mypy + ruff
+  clean.

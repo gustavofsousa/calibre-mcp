@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from .config import load_config
@@ -51,16 +51,19 @@ def _get_library() -> CalibreLibrary:
     return _library
 
 
-def _map_errors(fn: Callable[..., dict]) -> Callable[..., dict]:
+def _map_errors[T](fn: Callable[..., T]) -> Callable[..., T]:
     """Map every known failure to an explicit ``ToolError`` (design error table).
 
     Guarantees a failure is never returned as a silent wrong/empty result: each
     ``CalibreMcpError`` (config, not-found, invalid input, locked, calibredb,
     confirmation) surfaces as a clear tool error the host/LLM can act on.
+    Generic over the wrapped tool's return type (``dict`` for every existing
+    tool, ``Image | dict`` for ``read_cover``, AD-024) — a pure typing change,
+    behavior is unchanged: it only ever re-raises what ``fn`` returns/raises.
     """
 
     @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> dict:
+    def wrapper(*args: Any, **kwargs: Any) -> T:
         try:
             return fn(*args, **kwargs)
         except CalibreMcpError as exc:
@@ -150,6 +153,33 @@ def get_book(book_id: int) -> dict:
     (VIEW-02) — never an empty or misleading record.
     """
     return _book_to_dict(_get_library().get_book(book_id))
+
+
+@mcp.tool()
+@_map_errors
+def read_cover(book_id: int) -> Any:
+    """Return a book's cover as viewable image content (RCOVER-01..05).
+
+    A book with a cover returns the cover itself as viewable image content
+    (``image/jpeg``) so the host can actually see it -- not just a path. A book
+    with no cover returns ``{book_id, has_cover: false, cover_path: null}`` --
+    not an error. An unknown id raises a "book not found" error; a book whose
+    metadata claims a cover but whose ``cover.jpg`` is missing on disk raises
+    invalid input (a real metadata<->disk inconsistency), mirroring
+    ``format_files`` rather than a silent "no cover" degrade. Pure read: no
+    write, no ``calibredb`` call, no network.
+    """
+    # SPEC_DEVIATION: design.md specifies `-> Image | dict` as the return
+    # annotation. With the installed mcp SDK (1.28.1) that crashes tool
+    # *registration*: building the union's structured-output schema calls
+    # pydantic's create_model() unconditionally (even for
+    # structured_output=False) and pydantic has no schema for Image.
+    # Reason: `-> Any` produces the identical runtime wire behavior --
+    # FastMCP's content conversion dispatches on the actual returned value's
+    # type, not the static annotation, and output_schema is None either way
+    # (verified) -- while avoiding the crash.
+    result = _get_library().read_cover(book_id)
+    return Image(path=result["cover_path"]) if result["has_cover"] else result
 
 
 @mcp.tool()

@@ -18,6 +18,9 @@ Coverage:
   VIEW-01    get_book returns the full record.
   VIEW-02    an unknown id surfaces a clear "not found" tool error.
   VIEW-03    a non-integer id is rejected at the boundary (before DB access).
+  RCOVER-01  read_cover returns viewable image content for a covered book.
+  RCOVER-02  read_cover returns structured {has_cover: False} for no cover.
+  RCOVER-03  read_cover unknown id surfaces a clear tool error.
   EDIT-01    update_metadata without a token returns a diff + token, no write.
   EDIT-02    update_metadata with a matching token applies and re-reads.
   EDIT-04    an out-of-whitelist field surfaces an explicit tool error.
@@ -39,13 +42,18 @@ import asyncio
 import contextlib
 import io
 import json
+import re
 import shutil
 import stat
+import struct
+import subprocess
+import zlib
 from pathlib import Path
 from typing import Any
 
 import pytest
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
+from mcp.types import ImageContent
 
 from calibre_mcp import server
 from calibre_mcp.calibre_smtp_runner import CalibreSmtpRunner
@@ -58,6 +66,68 @@ from calibre_mcp.config import (
 )
 
 REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+
+
+def _valid_cover_png(path: Path, width: int = 100, height: int = 150) -> Path:
+    """Write a real, multi-pixel PNG using only stdlib zlib/struct.
+
+    Calibre re-encodes any valid input image to ``cover.jpg`` on
+    ``set_metadata --field cover:``. A degenerate 1x1 PNG is rejected by Qt
+    ("Image is empty"), so this emits a real WxH white image.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data))
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    row = b"\x00" + b"\xff\xff\xff" * width  # filter byte + white pixels
+    idat = zlib.compress(row * height)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+    return path
+
+
+def _seed_empty_book(library_path: Path, title: str = "Empty") -> int:
+    # calibredb add --empty has no CalibredbRunner wrapper (adds no format /
+    # embedded cover) -- needed so an "uncovered" book is deterministic, since
+    # a real sample .epub's own embedded cover gets auto-extracted.
+    result = subprocess.run(
+        [
+            "calibredb",
+            "add",
+            "--empty",
+            "--title",
+            title,
+            "--with-library",
+            str(library_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    match = re.search(
+        r"Added book ids:\s*([\d,]+)", f"{result.stdout}\n{result.stderr}"
+    )
+    assert match is not None
+    return int(match.group(1).split(",")[0])
+
+
+def _seed_covered_book(library_path: Path, tmp_path: Path) -> int:
+    book_id = _seed_empty_book(library_path, "Covered")
+    cover_png = _valid_cover_png(tmp_path / "cover-source.png")
+    CalibredbRunner(library_path).set_metadata(book_id, {"cover": str(cover_png)})
+    return book_id
 
 
 def _sample_epub(tmp_path: Path, name: str = "sample.epub") -> Path:
@@ -74,6 +144,12 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     """Invoke a registered tool in-process and parse its JSON result payload."""
     result = asyncio.run(server.mcp.call_tool(name, arguments))
     return json.loads(result[0].text)
+
+
+def _call_raw(name: str, arguments: dict[str, Any]) -> Any:
+    """Invoke a registered tool in-process, returning the raw content blocks
+    (for a tool whose result may not be JSON text, e.g. image content)."""
+    return asyncio.run(server.mcp.call_tool(name, arguments))
 
 
 def _read_resource(uri: str) -> Any:
@@ -173,6 +249,43 @@ def test_get_book_non_integer_id_rejected_at_boundary(env: Path):
         _call("get_book", {"book_id": "not-a-number"})
 
     assert "integer" in str(excinfo.value).lower()
+
+
+# -------------------------------------------------------------------- COVER
+
+
+@pytest.mark.e2e
+def test_read_cover_covered_book_returns_viewable_image_content(
+    env: Path, tmp_path: Path
+):
+    # RCOVER-01: a cover present -> image content, MIME image/jpeg, non-empty.
+    book_id = _seed_covered_book(env, tmp_path)
+
+    content = _call_raw("read_cover", {"book_id": book_id})
+
+    assert len(content) == 1
+    assert isinstance(content[0], ImageContent)
+    assert content[0].mimeType == "image/jpeg"
+    assert content[0].data
+
+
+@pytest.mark.e2e
+def test_read_cover_uncovered_book_returns_structured_no_cover(env: Path):
+    # RCOVER-02: no cover -> structured {has_cover: False}, not an error/image.
+    book_id = _seed_empty_book(env)
+
+    payload = _call("read_cover", {"book_id": book_id})
+
+    assert payload == {"book_id": book_id, "has_cover": False, "cover_path": None}
+
+
+@pytest.mark.e2e
+def test_read_cover_unknown_id_is_tool_error(env: Path):
+    # RCOVER-03: an unknown id -> clear "not found" tool error naming the id.
+    with pytest.raises(ToolError) as excinfo:
+        _call("read_cover", {"book_id": 999999})
+
+    assert "999999" in str(excinfo.value)
 
 
 # --------------------------------------------------------------------- EDIT
