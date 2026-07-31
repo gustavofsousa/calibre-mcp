@@ -364,7 +364,8 @@ class SqliteReader:
         if not row["has_cover"]:
             return None
 
-        cover = self._library_path / row["path"] / "cover.jpg"
+        book_path: str = row["path"]
+        cover = self._library_path / book_path / "cover.jpg"
         if not cover.is_file():
             raise InvalidInputError(
                 f"cover file for book {book_id} not found on disk: {cover}"
