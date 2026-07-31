@@ -86,6 +86,30 @@ def test_get_book_preserves_multi_author_order(reader: SqliteReader):
 
 
 @pytest.mark.integration
+def test_books_by_author_finds_every_book_ascending_sorted(reader: SqliteReader):
+    # ARENAME-01: "Papa Francisco" credits books 1,2,4,5 (verified in the real
+    # library) -- returned ascending regardless of underlying link-table order.
+    ids = reader.books_by_author("Papa Francisco")
+
+    assert ids == [1, 2, 4, 5]
+
+
+@pytest.mark.integration
+def test_books_by_author_finds_coauthored_book_by_either_credited_name(
+    reader: SqliteReader,
+):
+    # ARENAME-01: book 27 credits two authors; matching by either name finds it.
+    assert 27 in reader.books_by_author("Francisco Adolfo de Varnhagen")
+    assert 27 in reader.books_by_author("João Capistrano de Abreu")
+
+
+@pytest.mark.integration
+def test_books_by_author_no_match_returns_empty_list(reader: SqliteReader):
+    # ARENAME-02: an author name credited to no book returns [] (not an error).
+    assert reader.books_by_author("Nonexistent Author XYZ") == []
+
+
+@pytest.mark.integration
 def test_get_book_unknown_id_raises_not_found(reader: SqliteReader):
     # VIEW-02: missing id -> BookNotFoundError naming the id.
     with pytest.raises(BookNotFoundError) as excinfo:

@@ -134,6 +134,26 @@ class SqliteReader:
             conn.close()
         return [book for book in books if book is not None]
 
+    def books_by_author(self, name: str) -> list[int]:
+        """Return the ascending-sorted ids of every book credited to ``name``
+        by exact match (ARENAME-01/02 discovery step).
+
+        Matches the same ``books_authors_link``/``authors`` join as
+        ``_authors``; a co-authored book is returned when ``name`` matches any
+        of its credited authors. No match returns ``[]``.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT l.book FROM books_authors_link l "
+                "JOIN authors a ON a.id = l.author "
+                "WHERE a.name = ? ORDER BY l.book",
+                (name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["book"] for r in rows]
+
     @staticmethod
     def _require_int(book_id: int) -> None:
         if not isinstance(book_id, int) or isinstance(book_id, bool):
