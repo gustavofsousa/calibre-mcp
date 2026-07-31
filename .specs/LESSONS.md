@@ -56,6 +56,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: .specs/features/author-rename/validation.md (Edge Cases: case-only rename; set-change token mismatch) (tests)
 - last seen: 2026-07-31T02:53:00Z
 
+### L-008 — Annotate a FastMCP tool that returns MCP Image content as -> Any, not a real Image|dict union: the union crashes tool registration under mcp SDK 1.28.1 (pydantic create_model has no schema for Image); runtime wire behavior is identical since FastMCP dispatches on the returned value's type
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `src/calibre_mcp/server.py` · harmful: 0
+- features: cover-read
+- evidence: .specs/features/cover-read/validation.md (SPEC_DEVIATION: read_cover -> Any); src/calibre_mcp/server.py read_cover (src/calibre_mcp/server.py)
+- last seen: 2026-07-31T23:36:39Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

@@ -129,11 +129,11 @@ now raises invalid input. Assert no `metadata.db` backup file was created by any
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| RCOVER-01 | P1: See a book's cover | Implementing | Implementing |
-| RCOVER-02 | P1: See a book's cover | Implementing | Implementing |
-| RCOVER-03 | P1: See a book's cover | Implementing | Implementing |
-| RCOVER-04 | P1: See a book's cover | Implementing | Implementing |
-| RCOVER-05 | P1: See a book's cover | Implementing | Implementing |
+| RCOVER-01 | P1: See a book's cover | Implementing | Verified |
+| RCOVER-02 | P1: See a book's cover | Implementing | Verified |
+| RCOVER-03 | P1: See a book's cover | Implementing | Verified |
+| RCOVER-04 | P1: See a book's cover | Implementing | Verified |
+| RCOVER-05 | P1: See a book's cover | Implementing | Verified |
 
 **ID format:** `RCOVER-[NUMBER]`.
 
