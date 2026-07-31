@@ -168,20 +168,22 @@ clean run assert a removed loser's `trash_location` exists on disk (recoverable)
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| MERGE-01 | P1: Merge in one reviewed call | Design | Pending |
-| MERGE-02 | P1: Merge in one reviewed call | Design | Pending |
-| MERGE-03 | P1: Merge in one reviewed call | Design | Pending |
-| MERGE-04 | P1: Merge in one reviewed call | Design | Pending |
-| MERGE-05 | P1: Merge in one reviewed call | Design | Pending |
-| MERGE-06 | P1: Data-safe, recoverable deletion | Design | Pending |
-| MERGE-07 | P1: Merge in one reviewed call | Design | Pending |
-| MERGE-08 | P1: Data-safe, recoverable deletion | Design | Pending |
+| MERGE-01 | P1: Merge in one reviewed call | Implementing | Implementing |
+| MERGE-02 | P1: Merge in one reviewed call | Implementing | Implementing |
+| MERGE-03 | P1: Merge in one reviewed call | Implementing | Implementing |
+| MERGE-04 | P1: Merge in one reviewed call | Implementing | Implementing |
+| MERGE-05 | P1: Merge in one reviewed call | Implementing | Implementing |
+| MERGE-06 | P1: Data-safe, recoverable deletion | Implementing | Implementing |
+| MERGE-07 | P1: Merge in one reviewed call | Implementing | Implementing |
+| MERGE-08 | P1: Data-safe, recoverable deletion | Implementing | Implementing |
 
 **ID format:** `MERGE-[NUMBER]`.
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 8 total. Design pending at `.specs/features/merge-duplicate-group/design.md`.
+**Coverage:** 8 total, 8 mapped to tasks (T1..T3). Implemented across commits on `feat/author-rename`;
+flips to `Verified` after the independent Verifier passes (author does not self-mark Verified).
+Design at `.specs/features/merge-duplicate-group/design.md`.
 
 ---
 
