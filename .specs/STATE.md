@@ -93,9 +93,19 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `{book_ids: sorted, …}` — gates the whole batch (AD-012); for **additive** batches (convert) there
   is **no token** (AD-016). ORGN-01/02/03 consume this pattern as their apply step.
 
+- **AD-021 — Filesystem discovery is its own pure module.** Directory scanning (folder import,
+  BULK-03, and any future tree-walk) lives in a dedicated pure module (`folder_scan.py`), never in
+  `SqliteReader` (metadata.db-only, AD-001/AD-017), never inline in the `CalibreLibrary` facade, and
+  never in the tool layer. Extends the existing invariant (tool layer touches no `sqlite3`/`subprocess`
+  directly) to name **filesystem-walk** as a third I/O kind that the facade *orchestrates* but does
+  not *perform*. The scan module has no `calibredb`/`sqlite3` dependency and reads the filesystem
+  only (`os.walk`, `followlinks=False`, hidden entries pruned). The facade converts a scan-time
+  `OSError` into an `InvalidInputError` so the tool-layer error mapping (`_map_errors`, which only
+  catches `CalibreMcpError`) stays whole. Established by BULK-03 (`folder-import`).
+
 ## Backlog — deferred (post-P2)
 
-- (empty — STATS-01 shipped; see Handoff. Next Phase-2 targets: BULK-02 specced/ready; BULK-03,
+- (empty — STATS-01 + BULK-01 + BULK-02 + BULK-03 shipped; see Handoff. Remaining Phase-2 targets:
   ORGN-01/02/03 not yet spec'd — see `.specs/ROADMAP.md`.)
 
 ## Environment
@@ -106,8 +116,8 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 
 ## Handoff
 
-- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 BULK-01 + BULK-02 —
-  all committed with independent-Verifier PASS reports.
+- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 BULK-01 + BULK-02 +
+  BULK-03 — all committed with independent-Verifier PASS reports.
   - **P1 / P2** (`calibre-management`, `calibre-management-p2`): read + curate + convert +
     find_duplicates + email. `SqliteReader` constructor takes `(db_path, library_path)`.
   - **STATS-01** (`library-stats`, Phase 1): `calibre://library/stats` MCP resource (Option A,
@@ -128,9 +138,20 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
     user-approved decision: single `convert_book` now backs up *before* the shared convert (unifying
     with the bulk one-backup order); its CONV-01 bogus-source assertion was aligned to spec AC-5
     (a pre-convert snapshot is harmless under AD-011). Full suite: 211 passed; mypy + ruff clean.
-- **Next Phase-2 targets after BULK-02:** BULK-03 (folder import), ORGN-01/02/03 (author/tag rename,
-  duplicate merge) — not yet spec'd. Full roadmap in `.specs/ROADMAP.md`.
+  - **BULK-03** (`folder-import`, Phase 2): `import_folder` — recursive ebook discovery under a
+    directory (new pure `folder_scan.py`, case-insensitive 19-ext whitelist, hidden/dotfile excluded,
+    no symlink-follow, sorted) imported additive/no-token (AD-016) in one batch: one `metadata.db`
+    backup before the loop, best-effort **three-bucket** result `added`/`duplicate`/`failed`
+    (AD-020). 500-candidate cap rejected pre-backup (boundary 500 accepted/501 rejected); non-dir and
+    unreadable-dir also rejected pre-backup. Refactor extracted a shared add core (`_import_one`,
+    no backup inside — L-006) reused by the single `add_book`. New **AD-021** (filesystem discovery
+    is its own pure module — the sqlite/subprocess invariant gains a third named I/O kind). Verifier
+    PASS (4/4 mutants killed), `.specs/features/folder-import/validation.md`. Commits
+    `bab26e1`/`076bc5e`/`9fd7b71`/`015fafe`. Full suite: 236 passed; mypy + ruff clean.
+- **Next Phase-2 targets after BULK-03:** ORGN-01/02/03 (author/tag rename, duplicate merge) — not
+  yet spec'd. Full roadmap in `.specs/ROADMAP.md`.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
-  `bulk-convert` (BULK-02, 6 req `BCONV`). Stack: uv + pytest + ruff; test-safety rule enforced via
-  the `scratch_library` fixture (writes never touch the real library).
+  `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`). Stack: uv +
+  pytest + ruff; test-safety rule enforced via the `scratch_library` fixture (writes never touch the
+  real library).
