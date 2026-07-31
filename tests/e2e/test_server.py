@@ -354,6 +354,67 @@ def test_stdout_stays_clean_across_bulk_edit_calls(two_seeded: list[int]):
     assert buffer.getvalue() == ""
 
 
+# ---------------------------------------------------------------- RENAME AUTHOR
+
+
+@pytest.fixture
+def author_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed two books: one credited to 'Old Name', one to 'Someone Else'."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "old.epub")
+    shutil.copy2(sources[1], tmp_path / "other.epub")
+    old_id = runner.add(tmp_path / "old.epub").book_id
+    other_id = runner.add(tmp_path / "other.epub").book_id
+    assert old_id is not None and other_id is not None
+    runner.set_metadata(old_id, {"authors": ["Old Name"]})
+    runner.set_metadata(other_id, {"authors": ["Someone Else"]})
+    return old_id, other_id
+
+
+@pytest.mark.e2e
+def test_rename_author_plan_then_apply_round_trip(author_seeded: tuple[int, int]):
+    # ARENAME-01/04/08: plan (no token) -> per-book resolved diff + token, no
+    # write; apply (token) -> writes the affected book, re-read reflects the
+    # rename, and the unaffected book is untouched.
+    old_id, other_id = author_seeded
+
+    plan = _call("rename_author", {"old_name": "Old Name", "new_name": "New Name"})
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == {old_id}
+    assert plan["diffs"][0]["diff"]["authors"]["proposed"] == ["New Name"]
+    assert _call("get_book", {"book_id": old_id})["authors"] == ["Old Name"]
+
+    applied = _call(
+        "rename_author",
+        {
+            "old_name": "Old Name",
+            "new_name": "New Name",
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "renamed"
+    assert applied["applied"] == [{"book_id": old_id, "authors": ["New Name"]}]
+    assert applied["failed"] == []
+    assert _call("get_book", {"book_id": old_id})["authors"] == ["New Name"]
+    assert _call("get_book", {"book_id": other_id})["authors"] == ["Someone Else"]
+
+
+@pytest.mark.e2e
+def test_rename_author_not_found_is_tool_error(env: Path):
+    # ARENAME-02: an author matching no book surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "rename_author", {"old_name": "Nobody At All", "new_name": "New Name"}
+        )
+
+    assert "not found" in str(excinfo.value).lower()
+
+
 # ---------------------------------------------------------------------- ADD
 
 

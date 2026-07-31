@@ -218,6 +218,43 @@ def update_metadata_bulk(
 
 @mcp.tool()
 @_map_errors
+def rename_author(
+    old_name: str,
+    new_name: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Rename an author across every book they're credited on, two-step
+    plan->confirm (ORGN-01, ARENAME-01..08).
+
+    HOST: surface the returned per-book plan (each book's ``authors``
+    current->proposed) to the USER and only re-call with
+    ``confirmation_token`` after they approve.
+
+    ``old_name`` is matched EXACTLY (case-sensitive) against every book
+    credited to that author. Without a token: nothing is written; discovers
+    every affected book and returns its resolved ``authors`` diff plus one
+    deterministic ``confirmation_token`` covering the whole batch. If
+    ``old_name`` matches no author, or ``new_name`` is blank/equal to
+    ``old_name``, the call is rejected before any backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then applies every
+    affected book best-effort in ``book_id`` order. The rename is
+    CO-AUTHOR-SAFE: only ``old_name`` is replaced on each book — every other
+    credited author and their order is preserved (never an overwrite of the
+    whole author list). Renaming onto a name already used by another author
+    MERGES the two (a book crediting both collapses to a single entry,
+    deduped). A single book's failure never voids the batch; the result
+    reports ``applied`` (with each book's re-read resulting ``authors``) and
+    ``failed`` (with the error) separately — never a false "all renamed". A
+    mismatched token is refused before any write.
+    """
+    return _jsonify(
+        _get_library().rename_author(old_name, new_name, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
 def add_book(path: str) -> dict:
     """Import an ebook file into the library by local filesystem path (ADD-01..04).
 
