@@ -73,11 +73,28 @@ _OP_EMAIL = "email_book"
 _OP_UPDATE_BULK = "update_metadata_bulk"
 _OP_RENAME_AUTHOR = "rename_author"
 _OP_RENAME_TAG = "rename_tag"
+_OP_MERGE_GROUP = "merge_duplicate_group"
 
 # Sentinel id bound into the bulk token in place of a single book id — the
 # batch identity lives entirely in the payload's ``book_ids`` (design §Data
 # Models).
 _BULK_TOKEN_ID = 0
+
+
+def plan_loser_formats(
+    loser_formats: list[str], survivor_formats: list[str]
+) -> tuple[list[str], list[str]]:
+    """Split a loser's formats into what a merge would add vs. skip (MERGE-01/07).
+
+    Pure set split, sorted for deterministic plan output: ``to_add`` = formats
+    the loser has that the survivor doesn't (attaching these is what the merge
+    does); ``already_present`` = the overlap (the survivor's copy wins,
+    ``add_format --dont-replace``, so these are reported, not attached).
+    """
+    survivor_set = set(survivor_formats)
+    to_add = sorted(f for f in loser_formats if f not in survivor_set)
+    already_present = sorted(f for f in loser_formats if f in survivor_set)
+    return to_add, already_present
 
 
 class CalibreLibrary:
