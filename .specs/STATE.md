@@ -201,12 +201,25 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
     runs, author 3/3 + verifier 4/4, 7/7 killed) **plus a structural code-trace** confirming the
     removal lines are unreachable except after a fully-completed attach loop — the data-safety
     ordering is a guarantee, not just a tested behavior. `.specs/features/merge-duplicate-group/validation.md`.
-- **Next:** Phase 3 (Covers & Enrichment) — first feature needing a new outbound-network AD (see
-  ROADMAP.md's open architectural question). Full roadmap in `.specs/ROADMAP.md`.
+- **In progress — ORGN-04** (`series-rename`, Phase 2 follow-on, closes the AD-019 author/tag/series
+  organization triad): `rename_series` — series-scoped sibling of ORGN-01/02, T1-T3 implemented
+  (`books_by_series` discovery, facade plan→confirm batch, MCP tool), all commits green
+  (ruff/mypy/pytest). **Status: Implementing, awaiting independent Verifier PASS** — T4 (this entry)
+  is the traceability closeout, not the Verified mark. Key divergence from ORGN-01/02: series is a
+  single-valued field, so there is no list resolver — the apply writes `{"series": new_series}`
+  ONLY, never `series_index`, so each book's position survives the rename (SRENAME-07, empirically
+  verified against `calibredb` and covered by a fractional-index (`7.5`) round-trip test). The real
+  library has 0 books in any series (`series_unused`), so all new tests seed a `scratch_library`
+  rather than anchoring on the real one. Spec/design/tasks at `.specs/features/series-rename/`.
+- **Next:** dispatch the independent Verifier for ORGN-04 (spec-anchored check + discrimination
+  sensor) — Execute is not done until it PASSes. After that: Phase 3 (Covers & Enrichment) — first
+  feature needing a new outbound-network AD (see ROADMAP.md's open architectural question). Full
+  roadmap in `.specs/ROADMAP.md`.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
   `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
-  `merge-duplicate-group` (ORGN-03, 8 req `MERGE`). Stack: uv + pytest + ruff; test-safety rule
-  enforced via the `scratch_library` fixture (writes never touch the real library). Full suite as of
-  Phase 2 close: 294 passed; mypy + ruff clean.
+  `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
+  Implementing). Stack: uv + pytest + ruff; test-safety rule enforced via the `scratch_library`
+  fixture (writes never touch the real library). Full build gate re-run as the T4 closeout
+  regression: 307 passed, 0 failed; mypy + ruff clean.
