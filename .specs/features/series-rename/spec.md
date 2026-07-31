@@ -184,21 +184,22 @@ anymore) — proving the rename fully consumed the old series.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| SRENAME-01 | P1: Rename via one reviewed call | Implementing | Implementing |
-| SRENAME-02 | P1: Rename via one reviewed call | Implementing | Implementing |
-| SRENAME-03 | P1: Rename via one reviewed call | Implementing | Implementing |
-| SRENAME-04 | P1: Rename via one reviewed call | Implementing | Implementing |
-| SRENAME-05 | P1: Rename via one reviewed call | Implementing | Implementing |
-| SRENAME-06 | P1: Rename via one reviewed call | Implementing | Implementing |
-| SRENAME-07 | P1: Index-preserving rename & merge | Implementing | Implementing |
-| SRENAME-08 | P1: Rename via one reviewed call | Implementing | Implementing |
+| SRENAME-01 | P1: Rename via one reviewed call | Implementing | Verified |
+| SRENAME-02 | P1: Rename via one reviewed call | Implementing | Verified |
+| SRENAME-03 | P1: Rename via one reviewed call | Implementing | Verified |
+| SRENAME-04 | P1: Rename via one reviewed call | Implementing | Verified |
+| SRENAME-05 | P1: Rename via one reviewed call | Implementing | Verified |
+| SRENAME-06 | P1: Rename via one reviewed call | Implementing | Verified |
+| SRENAME-07 | P1: Index-preserving rename & merge | Implementing | Verified |
+| SRENAME-08 | P1: Rename via one reviewed call | Implementing | Verified |
 
 **ID format:** `SRENAME-[NUMBER]`.
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 8 total, 8 mapped to tasks (T1..T3), 8 Implementing — awaiting independent Verifier
-PASS to flip to Verified. Design at `.specs/features/series-rename/design.md`.
+**Coverage:** 8 total, 8 mapped to tasks (T1..T3), 8 **Verified** by independent Verifier
+(2026-07-31, clean PASS: 8/8 ACs spec-anchored, gate 307 passed / 0 failed, 3/3 mutants killed).
+See `.specs/features/series-rename/validation.md`. Design at `.specs/features/series-rename/design.md`.
 
 ---
 
