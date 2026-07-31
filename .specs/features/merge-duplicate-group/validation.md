@@ -138,3 +138,30 @@ mutation primitive — pure orchestration over three already-Verified primitives
   all-overlap-loser-still-removed test to close them.
 
 **Next steps**: dispatch an independent Verifier; on PASS, flip MERGE-01..08 to Verified in spec.md.
+
+---
+
+## Independent Verifier Confirmation (2026-07-31)
+
+The self-run caveat above was closed: a **separate `verifier` sub-agent** (author ≠ verifier)
+independently re-derived coverage with evidence-or-zero and returned **PASS**.
+
+- All 3 merge-duplicate-group suites run green against the **real** library (nothing skipped): unit
+  4, integration 8 (14.7s, real `calibredb`), e2e 2.
+- 8/8 MERGE ACs covered by tests asserting the spec-defined outcome — no mismatches between
+  asserted and spec-stated expected values.
+- Independent discrimination sensor — **4/4 killed**, using targets **disjoint** from this report's
+  3: (a) disabled the empty-`loser_ids` guard → reject test killed it; (b) moved the backup to run
+  after the loop (design Risk L-001) → backup-order test killed it; (c) turned `verify(...)` into a
+  no-op → token-mismatch test killed it; (d) removed `sorted(...)` from `plan_loser_formats`'s output
+  → a unit test killed it (the plan's exact sort order is pinned, not a gap). Coverage holds under
+  two independent fault sets (author 3 + verifier 4, seven total, zero survivors).
+- **Structural confirmation of the core invariant** (beyond testing): the verifier traced
+  `library.py` lines 667-691 and confirmed the attach loop is physically above `trash_book_files`/
+  `remove` within the same `try` block — any attach failure raises before reaching the removal
+  lines, which are therefore unreachable on any path except a fully-completed attach loop. The
+  data-safety ordering is a structural guarantee, not just a tested behavior.
+- No fix-list items — zero surviving mutants, zero uncovered ACs, zero spec-precision gaps.
+- Working tree confirmed clean of all mutations.
+
+**Combined verdict: ✅ Verified.** MERGE-01..08 flipped to Verified in spec.md.
