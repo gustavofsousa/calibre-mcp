@@ -128,6 +128,40 @@ def test_books_by_tag_no_match_returns_empty_list(reader: SqliteReader):
     assert reader.books_by_tag("Nonexistent Tag XYZ") == []
 
 
+# --------------------------------------------------------- books_by_series
+# The real library has 0 books in any series (series_unused) -- these tests
+# seed a scratch_library instead of using the real-library `reader` fixture.
+
+
+@pytest.mark.integration
+def test_books_by_series_finds_every_book_ascending_sorted(
+    scratch_library: Path, tmp_path: Path
+):
+    # SRENAME-01: two books in "Old", one in "Other" -- only the "Old" pair
+    # is returned, ascending regardless of underlying link-table order.
+    runner = CalibredbRunner(scratch_library)
+    id2 = _seed_book(scratch_library, tmp_path, "two.epub", index=1)
+    id1 = _seed_book(scratch_library, tmp_path, "one.epub", index=0)
+    id3 = _seed_book(scratch_library, tmp_path, "three.epub", index=2)
+    runner.set_metadata(id2, {"series": "Old", "series_index": "2.0"})
+    runner.set_metadata(id1, {"series": "Old", "series_index": "1.0"})
+    runner.set_metadata(id3, {"series": "Other", "series_index": "1.0"})
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.books_by_series("Old") == sorted([id1, id2])
+
+
+@pytest.mark.integration
+def test_books_by_series_no_match_returns_empty_list(
+    scratch_library: Path, tmp_path: Path
+):
+    # SRENAME-02: a series on no book returns [] (not an error).
+    _seed_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.books_by_series("Nonexistent Series XYZ") == []
+
+
 @pytest.mark.integration
 def test_get_book_unknown_id_raises_not_found(reader: SqliteReader):
     # VIEW-02: missing id -> BookNotFoundError naming the id.

@@ -174,6 +174,26 @@ class SqliteReader:
             conn.close()
         return [r["book"] for r in rows]
 
+    def books_by_series(self, name: str) -> list[int]:
+        """Return the ascending-sorted ids of every book whose series is
+        ``name`` by exact match (SRENAME-01/02 discovery step).
+
+        Matches the same ``books_series_link``/``series`` join as ``_series``.
+        No match returns ``[]`` (not an error) — the facade rejects that as
+        "series not found" before any backup.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT l.book FROM books_series_link l "
+                "JOIN series s ON s.id = l.series "
+                "WHERE s.name = ? ORDER BY l.book",
+                (name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["book"] for r in rows]
+
     @staticmethod
     def _require_int(book_id: int) -> None:
         if not isinstance(book_id, int) or isinstance(book_id, bool):
