@@ -143,6 +143,20 @@ class CalibreLibrary:
         (VIEW-01/02) and ``InvalidInputError`` for a non-int id (VIEW-03)."""
         return self._reader.get_book(book_id)
 
+    def read_cover(self, book_id: int) -> dict[str, Any]:
+        """Report cover presence + resolved path (RCOVER-01/02/03/05).
+
+        Pure read: propagates ``BookNotFoundError`` (unknown id) and
+        ``InvalidInputError`` (``has_cover`` true but ``cover.jpg`` missing on
+        disk) from ``cover_file``. No backup, no runner, no network.
+        """
+        cover = self._reader.cover_file(book_id)
+        return {
+            "book_id": book_id,
+            "has_cover": cover is not None,
+            "cover_path": str(cover) if cover is not None else None,
+        }
+
     def find_duplicates(self) -> dict[str, Any]:
         """Return groups of likely-duplicate books, advisory only (ORG-01).
 
