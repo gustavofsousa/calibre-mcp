@@ -145,3 +145,25 @@ reuse of the corrected primitive.
 
 **Next steps**: flip TRENAME-01..08 to Verified in spec.md (after any desired independent pass);
 optionally add a direct case-only-rename test and a stale-set token-mismatch test.
+
+---
+
+## Independent Verifier Confirmation (2026-07-31)
+
+The self-run caveat above was closed: a **separate `verifier` sub-agent** (author ≠ verifier)
+independently re-derived coverage with evidence-or-zero and returned **PASS**.
+
+- All 4 tag-rename suites run green against the **real** library (nothing skipped): unit 8, facade
+  9, reader 3, e2e 2.
+- 8/8 TRENAME ACs covered by tests asserting the spec-defined outcome (set-equality on tag re-reads
+  confirmed correct, not a gap).
+- Independent discrimination sensor — **4/4 killed**, using targets **disjoint** from this report's
+  3: (1) dropped `ORDER BY l.book` in `books_by_tag` → ascending-order test killed it; (2) moved the
+  backup after the apply loop → backup-before-write test killed it; (3) removed the `new==old` guard
+  → reject test killed it; (4) removed the `verify(...)` token check → token-mismatch test killed it.
+  Coverage holds under two independent fault sets (author 3 + verifier 4).
+- Non-blocking notes raised (neither an AC failure): case-only-rename edge case correct by
+  construction but unasserted; TRENAME-04's returned `backup` path value present but unasserted.
+- Working tree confirmed clean of all mutations.
+
+**Combined verdict: ✅ Verified.** TRENAME-01..08 flipped to Verified in spec.md.

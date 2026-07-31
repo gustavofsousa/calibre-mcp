@@ -176,22 +176,23 @@ old tag.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| TRENAME-01 | P1: Rename via one reviewed call | Implementing | Implementing |
-| TRENAME-02 | P1: Rename via one reviewed call | Implementing | Implementing |
-| TRENAME-03 | P1: Rename via one reviewed call | Implementing | Implementing |
-| TRENAME-04 | P1: Rename via one reviewed call | Implementing | Implementing |
-| TRENAME-05 | P1: Rename via one reviewed call | Implementing | Implementing |
-| TRENAME-06 | P1: Rename via one reviewed call | Implementing | Implementing |
-| TRENAME-07 | P1: Other-tag-safe replacement & merge | Implementing | Implementing |
-| TRENAME-08 | P1: Rename via one reviewed call | Implementing | Implementing |
+| TRENAME-01 | P1: Rename via one reviewed call | Verified | Verified |
+| TRENAME-02 | P1: Rename via one reviewed call | Verified | Verified |
+| TRENAME-03 | P1: Rename via one reviewed call | Verified | Verified |
+| TRENAME-04 | P1: Rename via one reviewed call | Verified | Verified |
+| TRENAME-05 | P1: Rename via one reviewed call | Verified | Verified |
+| TRENAME-06 | P1: Rename via one reviewed call | Verified | Verified |
+| TRENAME-07 | P1: Other-tag-safe replacement & merge | Verified | Verified |
+| TRENAME-08 | P1: Rename via one reviewed call | Verified | Verified |
 
 **ID format:** `TRENAME-[NUMBER]`.
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 8 total, 8 mapped to tasks (T1..T4). Implemented across commits on `feat/author-rename`;
-flips to `Verified` after the independent Verifier passes (author does not self-mark Verified).
-Design at `.specs/features/tag-rename/design.md`.
+**Coverage:** 8 total, 8 mapped to tasks (T1..T4), 8 Verified — **independent Verifier PASS**
+(`.specs/features/tag-rename/validation.md`, 2026-07-31): 8/8 ACs matched spec-defined outcomes,
+build gate green (280 passed), two independent discrimination-sensor runs (author 3/3 + independent
+verifier 4/4, disjoint fault sets, all killed). Design at `.specs/features/tag-rename/design.md`.
 
 ---
 
