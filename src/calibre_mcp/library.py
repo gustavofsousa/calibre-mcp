@@ -591,6 +591,125 @@ class CalibreLibrary:
             "diff": self._build_diff(book, {"tags": resolved}),
         }
 
+    def merge_duplicate_group(
+        self,
+        survivor_id: int,
+        loser_ids: list[int],
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        """Merge a duplicate group onto a caller-chosen survivor (ORGN-03,
+        MERGE-01..08).
+
+        Validates before any backup: ``loser_ids`` non-empty, no duplicates,
+        and ``survivor_id`` not among them (MERGE-03); survivor and every loser
+        must exist (MERGE-02, ``BookNotFoundError`` propagates from
+        ``get_book``). Plan step (no token): for each loser, splits its formats
+        into what would be added to the survivor vs. what the survivor already
+        has (MERGE-01/07, ``plan_loser_formats``) plus one deterministic batch
+        ``confirmation_token``; nothing is written. Apply step (token):
+        verifies the token against the recomputed batch (MERGE-05), takes one
+        ``metadata.db`` backup before the first mutation (MERGE-04), then
+        best-effort processes each loser in ascending id order: attach every
+        missing format onto the survivor first (``add_format
+        --dont-replace``), and only if ALL attaches succeed, trash-copy and
+        recycle-bin-remove that loser (data-safe — a loser is never removed
+        while one of its formats is not yet confirmed on the survivor,
+        MERGE-06). A per-loser failure lands in ``failed`` and the batch
+        continues, never a false "all merged"; the survivor's resulting
+        formats are re-read so the consolidation is demonstrated, not asserted
+        (MERGE-08).
+        """
+        if not loser_ids:
+            raise InvalidInputError("loser_ids must not be empty")
+        if survivor_id in loser_ids:
+            raise InvalidInputError(
+                f"survivor_id {survivor_id!r} must not appear in loser_ids"
+            )
+        if len(set(loser_ids)) != len(loser_ids):
+            raise InvalidInputError(
+                f"loser_ids must not contain duplicates: {loser_ids!r}"
+            )
+
+        survivor = self._reader.get_book(survivor_id)  # MERGE-02: not-found propagates
+        losers = {
+            loser_id: self._reader.get_book(loser_id) for loser_id in loser_ids
+        }
+
+        ordered_losers = sorted(loser_ids)
+        payload = {"survivor_id": survivor_id, "loser_ids": ordered_losers}
+
+        if token is None:
+            return {
+                "status": "plan",
+                "survivor_id": survivor_id,
+                "survivor_title": survivor.title,
+                "losers": [
+                    self._merge_plan_entry(losers[loser_id], survivor.formats)
+                    for loser_id in ordered_losers
+                ],
+                "recoverable": True,
+                "note": (
+                    "each loser's files will be copied to backups/trash/ and "
+                    "the record sent to the recycle bin (recoverable)"
+                ),
+                "confirmation_token": plan_token(
+                    _OP_MERGE_GROUP, _BULK_TOKEN_ID, payload
+                ),
+            }
+
+        verify(_OP_MERGE_GROUP, _BULK_TOKEN_ID, payload, token)  # MERGE-05
+        backup = backup_metadata_db(  # MERGE-04: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        merged: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for loser_id in ordered_losers:
+            try:
+                loser = self._reader.get_book(loser_id)  # vanished -> failed
+                files = self._reader.format_files(loser_id)
+                survivor_formats = set(self._reader.get_book(survivor_id).formats)
+                added: list[str] = []
+                for fmt in sorted(files):
+                    if fmt not in survivor_formats:
+                        self._runner.add_format(survivor_id, files[fmt])
+                        added.append(fmt)
+                # Data-safe (MERGE-06): only remove after every attach above
+                # succeeded — an exception during attach skips these two lines.
+                trash = trash_book_files(
+                    loser, self._config.library_path, self._config.backup_root
+                )
+                self._runner.remove(loser_id)
+                merged.append(
+                    {
+                        "loser_id": loser_id,
+                        "formats_added": added,
+                        "trash_location": str(trash.dest),
+                    }
+                )
+            except CalibreMcpError as exc:  # MERGE-06: loser NOT removed
+                failed.append({"loser_id": loser_id, "error": str(exc)})
+
+        return {
+            "status": "merged",
+            "survivor_id": survivor_id,
+            "merged": merged,
+            "failed": failed,
+            "survivor_formats": self._reader.get_book(survivor_id).formats,
+            "backup": str(backup),
+        }
+
+    @staticmethod
+    def _merge_plan_entry(loser: Book, survivor_formats: list[str]) -> dict[str, Any]:
+        """Build one loser's merge plan row (MERGE-01, MERGE-07)."""
+        to_add, already_present = plan_loser_formats(loser.formats, survivor_formats)
+        return {
+            "book_id": loser.id,
+            "title": loser.title,
+            "formats_to_add": to_add,
+            "formats_already_present": already_present,
+        }
+
     def add_book(self, path: str | Path) -> dict[str, Any]:
         """Import an ebook file by path (ADD-01..04).
 
