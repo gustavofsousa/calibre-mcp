@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "MCP server (stdio) to manage a Calibre ebook library: fast SQLite reads, integrity-safe calibredb writes."
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.2.0",
+    # Cap below 2.0: mcp 2.0.0 removed `mcp.server.fastmcp` (server.py imports it).
+    # The lockfile/CI run on 1.28.x; an unpinned `>=1.2.0` resolves to 2.0.0 on a
+    # fresh `uvx --from git+…` install and crashes at import. Keep FastMCP reachable.
+    "mcp>=1.2.0,<2",
 ]
 
 [project.scripts]
