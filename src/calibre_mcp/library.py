@@ -24,6 +24,7 @@ from .confirmation import plan_token, verify
 from .ebook_convert_runner import EbookConvertRunner
 from .errors import BookNotFoundError, CalibreMcpError, InvalidInputError
 from .folder_scan import scan_ebook_files
+from .rename_resolve import resolve_renamed_values
 from .sqlite_reader import Book, SqliteReader
 
 # CONV-01: formats convert_book accepts as a target, and the device-preference
@@ -71,6 +72,7 @@ _OP_REMOVE = "remove_book"
 _OP_EMAIL = "email_book"
 _OP_UPDATE_BULK = "update_metadata_bulk"
 _OP_RENAME_AUTHOR = "rename_author"
+_OP_RENAME_TAG = "rename_tag"
 
 # Sentinel id bound into the bulk token in place of a single book id — the
 # batch identity lives entirely in the payload's ``book_ids`` (design §Data
@@ -483,6 +485,93 @@ class CalibreLibrary:
         return {
             "book_id": book_id,
             "diff": self._build_diff(book, {"authors": resolved}),
+        }
+
+    def rename_tag(
+        self,
+        old_tag: str,
+        new_tag: str,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        """Rename a tag across every book carrying it (ORGN-02, TRENAME-01..08).
+
+        Tag-scoped twin of :meth:`rename_author`. Validates before any backup:
+        ``new_tag`` non-blank and different from ``old_tag`` (TRENAME-03), then
+        discovers every book carrying ``old_tag`` by exact match (TRENAME-01);
+        an empty discovery is rejected as "tag not found" (TRENAME-02). Plan
+        step (no token): returns each affected book's ``tags`` current->proposed
+        (the other-tag-safe swap + in-book dedupe/merge, TRENAME-07) plus one
+        deterministic batch ``confirmation_token``; nothing is written. Apply
+        step (token): verifies the token against the recomputed batch
+        (TRENAME-05, e.g. the affected set changed since the plan), takes one
+        ``metadata.db`` backup before the loop (TRENAME-04), then best-effort
+        applies each book in ascending ``book_id`` order — a per-book failure
+        lands in ``failed`` and the batch continues, never a false "all renamed"
+        (TRENAME-06); each applied book is re-read so success is demonstrated,
+        not asserted (TRENAME-08). Tags are a set: the re-read reflects Calibre's
+        stored ordering, not the plan's positional order.
+        """
+        if not new_tag or not new_tag.strip() or new_tag == old_tag:
+            raise InvalidInputError(
+                "invalid rename: new_tag must be non-blank and differ from "
+                f"old_tag (old_tag={old_tag!r}, new_tag={new_tag!r})"
+            )
+
+        book_ids = self._reader.books_by_tag(old_tag)  # already sorted
+        if not book_ids:  # TRENAME-02: reject before any backup/write
+            raise InvalidInputError(f"tag not found: {old_tag!r}")
+
+        payload = {"old_tag": old_tag, "new_tag": new_tag, "book_ids": book_ids}
+
+        if token is None:
+            return {
+                "status": "plan",
+                "old_tag": old_tag,
+                "new_tag": new_tag,
+                "diffs": [
+                    self._tag_rename_plan_entry(book_id, old_tag, new_tag)
+                    for book_id in book_ids
+                ],
+                "confirmation_token": plan_token(
+                    _OP_RENAME_TAG, _BULK_TOKEN_ID, payload
+                ),
+            }
+
+        verify(_OP_RENAME_TAG, _BULK_TOKEN_ID, payload, token)  # TRENAME-05
+        backup = backup_metadata_db(  # TRENAME-04: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        applied: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for book_id in book_ids:
+            try:
+                book = self._reader.get_book(book_id)  # vanished -> failed
+                resolved = resolve_renamed_values(book.tags, old_tag, new_tag)
+                self._runner.set_metadata(book_id, {"tags": resolved})
+                reread = self._reader.get_book(book_id)
+                applied.append({"book_id": book_id, "tags": reread.tags})
+            except CalibreMcpError as exc:  # TRENAME-06: never aborts the batch
+                failed.append({"book_id": book_id, "error": str(exc)})
+
+        return {
+            "status": "renamed",
+            "old_tag": old_tag,
+            "new_tag": new_tag,
+            "applied": applied,
+            "failed": failed,
+            "backup": str(backup),
+        }
+
+    def _tag_rename_plan_entry(
+        self, book_id: int, old_tag: str, new_tag: str
+    ) -> dict[str, Any]:
+        """Build one book's tag-rename plan row (TRENAME-01, TRENAME-07)."""
+        book = self._reader.get_book(book_id)
+        resolved = resolve_renamed_values(book.tags, old_tag, new_tag)
+        return {
+            "book_id": book_id,
+            "diff": self._build_diff(book, {"tags": resolved}),
         }
 
     def add_book(self, path: str | Path) -> dict[str, Any]:
