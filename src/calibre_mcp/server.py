@@ -356,6 +356,51 @@ def remove_book(book_id: int, confirmation_token: str | None = None) -> dict:
 
 @mcp.tool()
 @_map_errors
+def merge_duplicate_group(
+    survivor_id: int,
+    loser_ids: list[int],
+    confirmation_token: str | None = None,
+) -> dict:
+    """Merge a duplicate group onto a caller-chosen survivor, two-step
+    plan->confirm (ORGN-03, MERGE-01..08).
+
+    HOST: surface the returned plan (per-loser formats to add vs. already
+    present, and that every loser will be recoverably deleted) to the USER and
+    only re-call with ``confirmation_token`` after they approve.
+
+    You choose ``survivor_id`` (the record to keep) and ``loser_ids`` (the
+    records to fold into it) — typically from a ``find_duplicates`` group. The
+    merge is FORMATS-ONLY: the survivor's metadata (title, authors, tags, …)
+    is never touched, only its file formats change. Without a token: nothing
+    is written; returns, per loser, ``formats_to_add`` vs.
+    ``formats_already_present`` on the survivor, plus one deterministic
+    ``confirmation_token`` covering the whole batch. ``survivor_id``/loser ids
+    must all exist; ``loser_ids`` must be non-empty, without duplicates, and
+    must not include ``survivor_id`` — any violation is rejected before any
+    backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then processes each
+    loser best-effort in ascending id order. DATA-SAFE ORDERING: a loser's
+    formats are attached onto the survivor first (``add_format
+    --dont-replace`` — the survivor's existing copy always wins on conflict,
+    never duplicated); the loser is deleted — RECOVERABLY (trash copy +
+    recycle bin, never permanent) — only after every one of its formats is
+    confirmed on the survivor. If attaching a loser's format fails, that loser
+    is left untouched and reported in ``failed``; the batch continues with the
+    remaining losers — never a false "all merged". The result reports
+    ``merged`` (each loser's formats added + trash location) and ``failed``
+    separately, plus the survivor's re-read resulting ``formats`` (the proven
+    union). A mismatched token is refused before any write.
+    """
+    return _jsonify(
+        _get_library().merge_duplicate_group(
+            survivor_id, loser_ids, token=confirmation_token
+        )
+    )
+
+
+@mcp.tool()
+@_map_errors
 def convert_book(book_id: int, target_format: str) -> dict:
     """Convert a book to ``target_format`` via ``ebook-convert`` (CONV-01).
 

@@ -30,6 +30,7 @@ Coverage:
   CONV-01    convert_book adds a format additively; unsupported target is an error.
   ORG-01     find_duplicates returns groups; no duplicates -> empty group set.
   EMAIL-01   email_book plan->confirm two-step, sent via a stubbed calibre-smtp.
+  MERGE-01   merge_duplicate_group plan->confirm, format union + recoverable delete.
 """
 
 from __future__ import annotations
@@ -596,6 +597,82 @@ def test_remove_book_description_states_recoverable_two_step():
     assert "recoverable" in text
     assert "recycle bin" in text
     assert "review" in text and "confirm" in text
+
+
+# ---------------------------------------------------------- MERGE DUPLICATE GROUP
+
+
+@pytest.fixture
+def merge_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed a survivor (EPUB only) and a loser (EPUB + PDF), distinct files."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "survivor.epub")
+    shutil.copy2(sources[1], tmp_path / "loser.epub")
+    survivor_id = runner.add(tmp_path / "survivor.epub").book_id
+    loser_id = runner.add(tmp_path / "loser.epub").book_id
+    assert survivor_id is not None and loser_id is not None
+    fake_pdf = tmp_path / "extra.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+    runner.add_format(loser_id, fake_pdf)
+    return survivor_id, loser_id
+
+
+@pytest.mark.e2e
+def test_merge_duplicate_group_plan_then_apply_round_trip(
+    merge_seeded: tuple[int, int],
+):
+    # MERGE-01/04/07/08: plan (no token) -> per-loser format split + token, no
+    # write; apply (token) -> survivor gains the unique format, loser is gone.
+    survivor_id, loser_id = merge_seeded
+
+    plan = _call(
+        "merge_duplicate_group",
+        {"survivor_id": survivor_id, "loser_ids": [loser_id]},
+    )
+
+    assert plan["status"] == "plan"
+    entry = plan["losers"][0]
+    assert entry["book_id"] == loser_id
+    assert entry["formats_to_add"] == ["PDF"]
+    assert entry["formats_already_present"] == ["EPUB"]
+    assert _call("get_book", {"book_id": survivor_id})["formats"] == ["EPUB"]
+
+    result = _call(
+        "merge_duplicate_group",
+        {
+            "survivor_id": survivor_id,
+            "loser_ids": [loser_id],
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert result["status"] == "merged"
+    assert set(result["survivor_formats"]) == {"EPUB", "PDF"}
+    assert result["merged"] == [
+        {
+            "loser_id": loser_id,
+            "formats_added": ["PDF"],
+            "trash_location": result["merged"][0]["trash_location"],
+        }
+    ]
+    assert result["failed"] == []
+    with pytest.raises(ToolError):
+        _call("get_book", {"book_id": loser_id})  # gone
+
+
+@pytest.mark.e2e
+def test_merge_duplicate_group_invalid_loser_ids_is_tool_error(seeded: int):
+    # MERGE-03: survivor_id inside loser_ids surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "merge_duplicate_group",
+            {"survivor_id": seeded, "loser_ids": [seeded]},
+        )
+
+    assert "loser_ids" in str(excinfo.value)
 
 
 @pytest.mark.e2e
