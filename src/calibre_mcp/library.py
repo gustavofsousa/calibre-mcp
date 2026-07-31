@@ -14,6 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .author_rename import resolve_renamed_authors
 from .backup import backup_metadata_db, trash_book_files
 from .bulk_edit import LIST_FIELDS, LIST_MODES, resolve_fields
 from .calibre_smtp_runner import CalibreSmtpRunner
@@ -69,6 +70,7 @@ _OP_UPDATE = "update_metadata"
 _OP_REMOVE = "remove_book"
 _OP_EMAIL = "email_book"
 _OP_UPDATE_BULK = "update_metadata_bulk"
+_OP_RENAME_AUTHOR = "rename_author"
 
 # Sentinel id bound into the bulk token in place of a single book id — the
 # batch identity lives entirely in the payload's ``book_ids`` (design §Data
@@ -394,6 +396,93 @@ class CalibreLibrary:
             "applied": applied,
             "failed": failed,
             "backup": str(backup),
+        }
+
+    def rename_author(
+        self,
+        old_name: str,
+        new_name: str,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        """Rename an author across every book credited to them (ORGN-01,
+        ARENAME-01..08).
+
+        Validates before any backup: ``new_name`` non-blank and different from
+        ``old_name`` (ARENAME-03), then discovers every book credited to
+        ``old_name`` by exact match (ARENAME-01); an empty discovery is
+        rejected as "author not found" (ARENAME-02). Plan step (no token):
+        returns each affected book's ``authors`` current->proposed (the
+        co-author-safe swap + in-book dedupe/merge, ARENAME-07) plus one
+        deterministic batch ``confirmation_token``; nothing is written. Apply
+        step (token): verifies the token against the recomputed batch
+        (ARENAME-05, e.g. the affected set changed since the plan), takes one
+        ``metadata.db`` backup before the loop (ARENAME-04), then best-effort
+        applies each book in ascending ``book_id`` order — a per-book failure
+        lands in ``failed`` and the batch continues, never a false "all
+        renamed" (ARENAME-06); each applied book is re-read so success is
+        demonstrated, not asserted (ARENAME-08).
+        """
+        if not new_name or not new_name.strip() or new_name == old_name:
+            raise InvalidInputError(
+                "invalid rename: new_name must be non-blank and differ from "
+                f"old_name (old_name={old_name!r}, new_name={new_name!r})"
+            )
+
+        book_ids = self._reader.books_by_author(old_name)  # already sorted
+        if not book_ids:  # ARENAME-02: reject before any backup/write
+            raise InvalidInputError(f"author not found: {old_name!r}")
+
+        payload = {"old_name": old_name, "new_name": new_name, "book_ids": book_ids}
+
+        if token is None:
+            return {
+                "status": "plan",
+                "old_name": old_name,
+                "new_name": new_name,
+                "diffs": [
+                    self._rename_plan_entry(book_id, old_name, new_name)
+                    for book_id in book_ids
+                ],
+                "confirmation_token": plan_token(
+                    _OP_RENAME_AUTHOR, _BULK_TOKEN_ID, payload
+                ),
+            }
+
+        verify(_OP_RENAME_AUTHOR, _BULK_TOKEN_ID, payload, token)  # ARENAME-05
+        backup = backup_metadata_db(  # ARENAME-04: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        applied: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for book_id in book_ids:
+            try:
+                book = self._reader.get_book(book_id)  # vanished -> failed
+                resolved = resolve_renamed_authors(book.authors, old_name, new_name)
+                self._runner.set_metadata(book_id, {"authors": resolved})
+                reread = self._reader.get_book(book_id)
+                applied.append({"book_id": book_id, "authors": reread.authors})
+            except CalibreMcpError as exc:  # ARENAME-06: never aborts the batch
+                failed.append({"book_id": book_id, "error": str(exc)})
+
+        return {
+            "status": "renamed",
+            "old_name": old_name,
+            "new_name": new_name,
+            "applied": applied,
+            "failed": failed,
+            "backup": str(backup),
+        }
+
+    def _rename_plan_entry(
+        self, book_id: int, old_name: str, new_name: str
+    ) -> dict[str, Any]:
+        """Build one book's rename plan row (ARENAME-01, ARENAME-07)."""
+        book = self._reader.get_book(book_id)
+        resolved = resolve_renamed_authors(book.authors, old_name, new_name)
+        return {
+            "book_id": book_id,
+            "diff": self._build_diff(book, {"authors": resolved}),
         }
 
     def add_book(self, path: str | Path) -> dict[str, Any]:
