@@ -403,26 +403,43 @@ class CalibreLibrary:
             raise InvalidInputError(f"add_book: not an existing file: {file_path}")
 
         backup = backup_metadata_db(self._config.db_path, self._config.backup_root)
-        result = self._runner.add(file_path)  # ADD-04 failure propagates
+        result = self._import_one(file_path)  # ADD-04 failure propagates
 
-        if result.duplicate:  # ADD-03: surface, never hide
+        if result["duplicate"]:  # ADD-03: surface, never hide
             return {
                 "status": "duplicate",
                 "book_id": None,
                 "duplicate": True,
                 "backup": str(backup),
             }
+        return {
+            "status": "added",
+            "book_id": result["book_id"],
+            "duplicate": False,
+            "book": result["book"],
+            "backup": str(backup),
+        }
+
+    def _import_one(self, file_path: Path) -> dict[str, Any]:
+        """Classify one ``calibredb add`` result — shared by ``add_book`` and
+        ``import_folder`` (BIMPORT-05/06).
+
+        The single "surface duplicate, never a fake id, re-read on success"
+        rule. Contains NO backup — each caller backs up before calling this, so
+        no new side-effect ordering is introduced (lesson L-006).
+        """
+        result = self._runner.add(file_path)
+        if result.duplicate:
+            return {"duplicate": True, "book_id": None}
         if result.book_id is None:
             # Unreachable by construction (CalibredbRunner.add raises when it can
             # parse neither an id nor a duplicate); the guard keeps the state
             # impossible explicit instead of passing None to get_book.
             raise InvalidInputError("calibredb add returned no book id")
         return {
-            "status": "added",
-            "book_id": result.book_id,
             "duplicate": False,
+            "book_id": result.book_id,
             "book": self._reader.get_book(result.book_id),
-            "backup": str(backup),
         }
 
     def remove_book(self, book_id: int, token: str | None = None) -> dict[str, Any]:

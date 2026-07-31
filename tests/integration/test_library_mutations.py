@@ -239,6 +239,29 @@ def test_add_duplicate_surfaced_not_hidden(facade, tmp_path):
 
 
 @pytest.mark.integration
+def test_import_one_added_branch_returns_real_id_and_book(facade, tmp_path):
+    # BIMPORT-06 (via shared core): success -> real book_id + re-read metadata.
+    epub = _sample_epub(tmp_path)
+
+    result = facade._import_one(epub)
+
+    assert result["duplicate"] is False
+    assert isinstance(result["book_id"], int)
+    assert result["book"].id == result["book_id"]
+
+
+@pytest.mark.integration
+def test_import_one_duplicate_branch_never_returns_fake_id(facade, tmp_path):
+    # BIMPORT-05 (via shared core): a re-add is surfaced as duplicate, no id.
+    epub = _sample_epub(tmp_path)
+    facade._import_one(epub)
+
+    result = facade._import_one(epub)
+
+    assert result == {"duplicate": True, "book_id": None}
+
+
+@pytest.mark.integration
 def test_add_calibredb_failure_surfaces_stderr(facade, tmp_path, monkeypatch):
     # ADD-04: a calibredb add failure propagates with its stderr.
     epub = _sample_epub(tmp_path)
