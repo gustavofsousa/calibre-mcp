@@ -69,9 +69,11 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   and email (attachment). Reads stay in the read layer (AD-001); `SqliteReader` gains the library root
   in its constructor.
 
-- **AD-018 — Project direction: personal use, polished (not open source).** Confirmed 2026-07-17.
-  Single user, single library; no packaging/distribution/multi-library-config work planned.
-  STATS-01 is now in-spec (Phase 1); see `.specs/features/library-stats/spec.md`.
+- **AD-018 (SUPERSEDED by AD-023) — Project direction: personal use, polished (not open source).**
+  Confirmed 2026-07-17. Single user, single library; no packaging/distribution/multi-library-config
+  work planned. STATS-01 is now in-spec (Phase 1); see `.specs/features/library-stats/spec.md`.
+  Superseded 2026-07-31: the repo was already public + MIT since 2026-07-17, so this line no longer
+  described reality; AD-023 adopts open-source-as-brand explicitly.
 - **AD-019 — Ambition: full GUI replacement, resequenced roadmap.** Confirmed 2026-07-17. User
   wants calibre-mcp to eventually cover everything they currently use the Calibre GUI for — covers,
   bulk operations, author/tag/series organization, library maintenance — "the best server
@@ -110,10 +112,26 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `tags`/`languages` with `","`. Corrects a latent multi-author bug that predated ORGN-01 (BULK-01's
   author path was never exercised with more than one author). Established by ORGN-01 (`author-rename`).
 
+- **AD-023 — Direction: open-source-as-brand (supersedes AD-018).** Confirmed 2026-07-31. The
+  repo has been public + MIT since 2026-07-17, so "not open source" (AD-018) never matched reality;
+  this decision makes the posture explicit and acts on it. **Why:** market evidence — there are
+  already ~10 read-only Calibre MCP servers, all free, and MCP servers are near-impossible to
+  monetize directly (the host captures the value, not a local-file wrapper). Charging for
+  calibre-mcp is a dead end (wrong market, no moat, free competition). Its real leverage is
+  (a) a portfolio-grade proof of *how to design a mutation tool that's allowed to delete a user's
+  files* and (b) a reference prototype of a reusable **safe-mutation, human-in-the-loop MCP
+  pattern**. **Consequence:** the one defensible niche is *safe writes* — every competitor is
+  read-only/search. Positioning, README, and packaging lead with that differentiator (see Strategic
+  Horizon → Phase A in `.specs/ROADMAP.md`). Packaging becomes in-scope (reverses AD-018's "no
+  packaging"): frictionless `uvx --from git+…` install now, PyPI publish is a checkpointed one-way
+  door to decide later. Does not change AD-002/003 (still local stdio, no network transport) or the
+  single-library model (AD-007). The productize-the-pattern and vertical-that-pays bets (Phases B/C)
+  are strategy, recorded in the roadmap's Strategic Horizon, not committed calibre-mcp features.
+
 ## Backlog — deferred (post-P2)
 
-- (empty — STATS-01 + BULK-01 + BULK-02 + BULK-03 shipped; see Handoff. Remaining Phase-2 targets:
-  ORGN-01/02/03 not yet spec'd — see `.specs/ROADMAP.md`.)
+- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03 all shipped & Verified;
+  see Handoff. Next up is Phase 3 (Covers & Enrichment) — see `.specs/ROADMAP.md`.)
 
 ## Environment
 
@@ -123,8 +141,11 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 
 ## Handoff
 
-- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 BULK-01 + BULK-02 +
-  BULK-03 — all committed with independent-Verifier PASS reports.
+- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 in full — BULK-01 +
+  BULK-02 + BULK-03 + ORGN-01 + ORGN-02 + ORGN-03 — all committed with independent-Verifier PASS
+  reports. **Phase 2 phase-gate is closed** (2026-07-31): a full curation session (retag a batch,
+  fix an author's name everywhere, resolve a duplicate group, import a folder) never requires the
+  Calibre GUI.
   - **P1 / P2** (`calibre-management`, `calibre-management-p2`): read + curate + convert +
     find_duplicates + email. `SqliteReader` constructor takes `(db_path, library_path)`.
   - **STATS-01** (`library-stats`, Phase 1): `calibre://library/stats` MCP resource (Option A,
@@ -155,10 +176,37 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
     is its own pure module — the sqlite/subprocess invariant gains a third named I/O kind). Verifier
     PASS (4/4 mutants killed), `.specs/features/folder-import/validation.md`. Commits
     `bab26e1`/`076bc5e`/`9fd7b71`/`015fafe`. Full suite: 236 passed; mypy + ruff clean.
-- **Next Phase-2 targets after BULK-03:** ORGN-01/02/03 (author/tag rename, duplicate merge) — not
-  yet spec'd. Full roadmap in `.specs/ROADMAP.md`.
+  - **ORGN-01** (`author-rename`, Phase 2): `rename_author` — rename one author across every credited
+    book via one batch plan→confirm token, co-author-safe swap + in-book merge/dedupe
+    (`resolve_renamed_authors`, now aliasing the shared `rename_resolve.resolve_renamed_values`),
+    `books_by_author` exact-match discovery, one backup before the loop. Established **AD-022**
+    (`set_metadata` must join `authors` with `" & "`, not `,`, to avoid mashing co-authors into one
+    entity — a prerequisite correctness fix, also fixed BULK-01's latent same bug). Verifier PASS
+    (8/8 ARENAME, 3/3 mutants killed), `.specs/features/author-rename/validation.md`.
+  - **ORGN-02** (`tag-rename`, Phase 2): `rename_tag` — tag-scoped twin of ORGN-01: `books_by_tag`
+    discovery, the resolve rule *generalized* to shared `rename_resolve.resolve_renamed_values`
+    (author/tag now share one pure algebra instead of duplicating it) rather than cloned. No
+    prerequisite serialization fix needed — AD-022 already joins `tags` with `,` correctly. Tags are
+    a set: re-read assertions use set-equality, not positional order. Independent Verifier PASS
+    (8/8 TRENAME; two disjoint discrimination-sensor runs, author 3/3 + verifier 4/4, 7/7 killed),
+    `.specs/features/tag-rename/validation.md`.
+  - **ORGN-03** (`merge-duplicate-group`, Phase 2): `merge_duplicate_group` — the one Phase-2
+    organization feature that **deletes book records**. User-decided scope (2026-07-31):
+    caller-chosen `survivor_id`/`loser_ids` (no auto-pick), **formats-only** merge (survivor metadata
+    untouched — field enrichment deferred to Phase 3). No new mutation primitive: orchestrates
+    already-Verified `format_files`/`add_format --dont-replace`/the `remove_book` recoverable-delete
+    sequence, gated like `remove_book` extended to an AD-020 batch. Core invariant — a loser's
+    formats are attached to the survivor **before** that loser is recoverably deleted; an attach
+    failure leaves the loser untouched. Independent Verifier PASS (8/8 MERGE; two disjoint sensor
+    runs, author 3/3 + verifier 4/4, 7/7 killed) **plus a structural code-trace** confirming the
+    removal lines are unreachable except after a fully-completed attach loop — the data-safety
+    ordering is a guarantee, not just a tested behavior. `.specs/features/merge-duplicate-group/validation.md`.
+- **Next:** Phase 3 (Covers & Enrichment) — first feature needing a new outbound-network AD (see
+  ROADMAP.md's open architectural question). Full roadmap in `.specs/ROADMAP.md`.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
-  `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`). Stack: uv +
-  pytest + ruff; test-safety rule enforced via the `scratch_library` fixture (writes never touch the
-  real library).
+  `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
+  `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
+  `merge-duplicate-group` (ORGN-03, 8 req `MERGE`). Stack: uv + pytest + ruff; test-safety rule
+  enforced via the `scratch_library` fixture (writes never touch the real library). Full suite as of
+  Phase 2 close: 294 passed; mypy + ruff clean.
