@@ -255,6 +255,43 @@ def rename_author(
 
 @mcp.tool()
 @_map_errors
+def rename_tag(
+    old_tag: str,
+    new_tag: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Rename a tag across every book carrying it, two-step plan->confirm
+    (ORGN-02, TRENAME-01..08).
+
+    HOST: surface the returned per-book plan (each book's ``tags``
+    current->proposed) to the USER and only re-call with
+    ``confirmation_token`` after they approve.
+
+    ``old_tag`` is matched EXACTLY (case-sensitive) against every book carrying
+    that tag. Without a token: nothing is written; discovers every affected book
+    and returns its resolved ``tags`` diff plus one deterministic
+    ``confirmation_token`` covering the whole batch. If ``old_tag`` matches no
+    tag, or ``new_tag`` is blank/equal to ``old_tag``, the call is rejected
+    before any backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then applies every
+    affected book best-effort in ``book_id`` order. The rename is
+    OTHER-TAG-SAFE: only ``old_tag`` is replaced on each book — every other tag
+    is preserved (never an overwrite of the whole tag set). Renaming onto a tag
+    already in use MERGES the two (a book carrying both collapses to a single
+    entry, deduped). Tags are a set, so re-read ordering is Calibre's, not the
+    plan's. A single book's failure never voids the batch; the result reports
+    ``applied`` (with each book's re-read resulting ``tags``) and ``failed``
+    (with the error) separately — never a false "all renamed". A mismatched
+    token is refused before any write.
+    """
+    return _jsonify(
+        _get_library().rename_tag(old_tag, new_tag, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
 def add_book(path: str) -> dict:
     """Import an ebook file into the library by local filesystem path (ADD-01..04).
 
