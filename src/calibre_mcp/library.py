@@ -65,9 +65,14 @@ ALLOWED_EDIT_FIELDS = {
 _RATING_MIN = 0
 _RATING_MAX = 10
 
+# COVER-02: extensions ``set_cover`` accepts as a local cover image, validated
+# before any backup/write (calibredb silently no-ops on a bad path, design Risks).
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
 # Operation names bound into the plan token so the applied op is provably the
 # reviewed op (AD-012). Must stay stable between the plan and apply calls.
 _OP_UPDATE = "update_metadata"
+_OP_SET_COVER = "set_cover"
 _OP_REMOVE = "remove_book"
 _OP_EMAIL = "email_book"
 _OP_UPDATE_BULK = "update_metadata_bulk"
@@ -364,6 +369,66 @@ class CalibreLibrary:
             "status": "applied",
             "book_id": book_id,
             "book": self._reader.get_book(book_id),  # re-read (EDIT-02)
+            "backup": str(backup),
+        }
+
+    def set_cover(
+        self,
+        book_id: int,
+        image_path: str | Path,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        """Set a book's cover from a local image file via plan->confirm
+        (COVER-02, SCOVER-01..07).
+
+        Cover-typed twin of ``update_metadata``: validates BEFORE any backup
+        that the book exists (SCOVER-04) and ``image_path`` is an existing
+        file (SCOVER-02) with a supported image extension (SCOVER-03) --
+        ``calibredb`` silently no-ops on a missing/bad path, so this guard is
+        mandatory, not optional. Plan step (no token): reports whether the
+        book currently has a cover (``current_has_cover`` -- replace vs add,
+        SCOVER-07) via ``cover_file`` (COVER-01) and the resolved image path,
+        plus a deterministic ``confirmation_token``; nothing is written. Apply
+        step (token): verifies the token (SCOVER-06), backs up
+        ``metadata.db`` once, sets the cover via ``calibredb set_metadata
+        --field cover:<path>`` (runner unchanged), then RE-READS the cover
+        state so the result is demonstrated, not asserted (SCOVER-05).
+        """
+        self._reader.get_book(book_id)  # SCOVER-04: exists-precheck, no write
+        path = Path(image_path)
+        if not path.is_file():  # SCOVER-02: before any backup/write
+            raise InvalidInputError(f"set_cover: not an existing file: {path}")
+        if path.suffix.lower() not in _IMAGE_SUFFIXES:  # SCOVER-03
+            allowed = ", ".join(sorted(_IMAGE_SUFFIXES))
+            raise InvalidInputError(
+                f"set_cover: unsupported image extension {path.suffix!r}; "
+                f"allowed: {allowed}"
+            )
+
+        resolved = str(path)
+        payload = {"image_path": resolved}
+
+        if token is None:
+            current = self._reader.cover_file(book_id) is not None
+            return {
+                "status": "plan",
+                "book_id": book_id,
+                "current_has_cover": current,  # SCOVER-01/07: replace vs add
+                "new_cover": resolved,
+                "confirmation_token": plan_token(_OP_SET_COVER, book_id, payload),
+            }
+
+        verify(_OP_SET_COVER, book_id, payload, token)  # SCOVER-06 mismatch -> raise
+        backup = backup_metadata_db(  # SCOVER-05: once, before the write
+            self._config.db_path, self._config.backup_root
+        )
+        self._runner.set_metadata(book_id, {"cover": resolved})
+        new_cover = self._reader.cover_file(book_id)  # SCOVER-05: re-read, demonstrate
+        return {
+            "status": "applied",
+            "book_id": book_id,
+            "has_cover": new_cover is not None,
+            "cover_path": str(new_cover) if new_cover is not None else None,
             "backup": str(backup),
         }
 
