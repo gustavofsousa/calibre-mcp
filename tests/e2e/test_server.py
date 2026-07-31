@@ -378,6 +378,68 @@ def test_add_book_nonexistent_path_is_tool_error(env: Path):
     assert "file" in str(excinfo.value).lower()
 
 
+# ---------------------------------------------------------------- FOLDER IMPORT
+
+
+@pytest.mark.e2e
+def test_import_folder_happy_path_returns_three_buckets_and_backup(
+    env: Path, tmp_path: Path
+):
+    # BIMPORT-03/06: recursive import returns added (real id + metadata),
+    # empty duplicate/failed, and a backup path.
+    source = tmp_path / "src"
+    source.mkdir()
+    epub = _sample_epub(source, "book.epub")
+
+    result = _call("import_folder", {"path": str(source)})
+
+    assert result["status"] == "imported"
+    assert len(result["added"]) == 1
+    assert result["added"][0]["path"] == str(epub)
+    assert isinstance(result["added"][0]["book_id"], int)
+    assert result["added"][0]["book"]["id"] == result["added"][0]["book_id"]
+    assert result["duplicate"] == []
+    assert result["failed"] == []
+    assert result["backup"]
+
+
+@pytest.mark.e2e
+def test_import_folder_nonexistent_path_is_tool_error(env: Path):
+    # BIMPORT-02: a non-directory path is an explicit tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call("import_folder", {"path": "/no/such/directory"})
+
+    assert "directory" in str(excinfo.value).lower()
+
+
+@pytest.mark.e2e
+def test_import_folder_description_documents_contract():
+    # T4 Done-when: docstring documents recursive/additive/no-token, the
+    # 500 cap, the three buckets, and that non-ebook files are ignored.
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["import_folder"].description.lower()
+
+    assert "recursive" in text
+    assert "additive" in text and "no confirmation token" in text
+    assert "500" in text
+    assert "added" in text and "duplicate" in text and "failed" in text
+    assert "ignoring" in text or "ignored" in text
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_import_folder_calls(env: Path, tmp_path: Path):
+    # Design Risks: stdout is the MCP framing channel; import_folder must
+    # stay clean.
+    source = tmp_path / "src"
+    source.mkdir()
+    _sample_epub(source, "book.epub")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _call("import_folder", {"path": str(source)})
+
+    assert buffer.getvalue() == ""
+
+
 # ------------------------------------------------------------------- REMOVE
 
 

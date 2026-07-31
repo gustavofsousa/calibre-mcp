@@ -71,7 +71,9 @@ def _snapshots(backup_root: Path) -> list[Path]:
 
 
 @pytest.mark.integration
-def test_rejects_missing_path_before_scan_backup(facade: CalibreLibrary, backup_root: Path, tmp_path: Path):
+def test_rejects_missing_path_before_scan_backup(
+    facade: CalibreLibrary, backup_root: Path, tmp_path: Path
+):
     with pytest.raises(InvalidInputError):
         facade.import_folder(tmp_path / "does-not-exist")
 

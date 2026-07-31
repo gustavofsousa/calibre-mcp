@@ -231,6 +231,35 @@ def add_book(path: str) -> dict:
 
 @mcp.tool()
 @_map_errors
+def import_folder(path: str) -> dict:
+    """Import every ebook file under a directory, recursively (BULK-03).
+
+    ADDITIVE, NO confirmation token (like ``add_book``). Discovers every
+    ebook-candidate file under ``path`` — recursive (includes subfolders),
+    case-insensitive whitelist of unambiguous ebook formats — silently
+    ignoring non-ebook and hidden/dotfiles (they are never reported). Max 500
+    ebook candidates per call; a larger tree is rejected as invalid input
+    before any backup or import. Backs up ``metadata.db`` ONCE before the
+    batch.
+
+    Best-effort, honest THREE-bucket result — every candidate lands in
+    exactly one: ``added`` (with its new ``book_id`` and parsed metadata);
+    ``duplicate`` (already in the library — surfaced, never re-added, never a
+    fake id); or ``failed`` (a real per-file ``calibredb`` error). A single
+    file failing never aborts the batch and is never reported as a fake "all
+    imported".
+    """
+    result = _get_library().import_folder(path)
+    return {
+        **result,
+        "added": [
+            {**entry, "book": _book_to_dict(entry["book"])} for entry in result["added"]
+        ],
+    }
+
+
+@mcp.tool()
+@_map_errors
 def remove_book(book_id: int, confirmation_token: str | None = None) -> dict:
     """Remove a book — RECOVERABLE — via a two-step review->confirm (REM-01..06).
 
