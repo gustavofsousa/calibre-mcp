@@ -73,6 +73,7 @@ _OP_EMAIL = "email_book"
 _OP_UPDATE_BULK = "update_metadata_bulk"
 _OP_RENAME_AUTHOR = "rename_author"
 _OP_RENAME_TAG = "rename_tag"
+_OP_RENAME_SERIES = "rename_series"
 _OP_MERGE_GROUP = "merge_duplicate_group"
 
 # Sentinel id bound into the bulk token in place of a single book id — the
@@ -589,6 +590,109 @@ class CalibreLibrary:
         return {
             "book_id": book_id,
             "diff": self._build_diff(book, {"tags": resolved}),
+        }
+
+    def rename_series(
+        self,
+        old_series: str,
+        new_series: str,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        """Rename a series across every book in it (ORGN-04, SRENAME-01..08).
+
+        Series-scoped sibling of ``rename_tag``/``rename_author``, with one
+        divergence: series is a SINGLE-valued field (a book has at most one
+        series plus a ``series_index``), so there is no per-book list to
+        resolve — the proposed value is simply ``new_series`` — and the apply
+        writes the ``series`` field ONLY, never ``series_index``, so each
+        book's position is preserved across the rename (SRENAME-07).
+
+        Validates before any backup: ``new_series`` non-blank and different
+        from ``old_series`` (SRENAME-03), then discovers every book whose
+        series is ``old_series`` by exact match (SRENAME-01); an empty
+        discovery is rejected as "series not found" (SRENAME-02). Plan step
+        (no token): returns each affected book's ``series`` current->proposed
+        (with its unchanged ``series_index`` surfaced) plus one deterministic
+        batch ``confirmation_token``; nothing is written. Apply step (token):
+        verifies the token against the recomputed batch (SRENAME-05, e.g. the
+        affected set changed since the plan), takes one ``metadata.db`` backup
+        before the loop (SRENAME-04), then best-effort applies each book in
+        ascending ``book_id`` order — a per-book failure lands in ``failed``
+        and the batch continues, never a false "all renamed" (SRENAME-06);
+        each applied book is re-read (series + series_index) so success is
+        demonstrated, not asserted (SRENAME-08).
+        """
+        if not new_series or not new_series.strip() or new_series == old_series:
+            raise InvalidInputError(
+                "invalid rename: new_series must be non-blank and differ from "
+                f"old_series (old_series={old_series!r}, new_series={new_series!r})"
+            )
+
+        book_ids = self._reader.books_by_series(old_series)  # already sorted
+        if not book_ids:  # SRENAME-02: reject before any backup/write
+            raise InvalidInputError(f"series not found: {old_series!r}")
+
+        payload = {
+            "old_series": old_series,
+            "new_series": new_series,
+            "book_ids": book_ids,
+        }
+
+        if token is None:
+            return {
+                "status": "plan",
+                "old_series": old_series,
+                "new_series": new_series,
+                "diffs": [
+                    self._series_rename_plan_entry(book_id, old_series, new_series)
+                    for book_id in book_ids
+                ],
+                "confirmation_token": plan_token(
+                    _OP_RENAME_SERIES, _BULK_TOKEN_ID, payload
+                ),
+            }
+
+        verify(_OP_RENAME_SERIES, _BULK_TOKEN_ID, payload, token)  # SRENAME-05
+        backup = backup_metadata_db(  # SRENAME-04: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        applied: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for book_id in book_ids:
+            try:
+                self._reader.get_book(book_id)  # vanished -> failed
+                # series field ONLY -- never series_index (SRENAME-07).
+                self._runner.set_metadata(book_id, {"series": new_series})
+                reread = self._reader.get_book(book_id)
+                applied.append(
+                    {
+                        "book_id": book_id,
+                        "series": reread.series,
+                        "series_index": reread.series_index,
+                    }
+                )
+            except CalibreMcpError as exc:  # SRENAME-06: never aborts the batch
+                failed.append({"book_id": book_id, "error": str(exc)})
+
+        return {
+            "status": "renamed",
+            "old_series": old_series,
+            "new_series": new_series,
+            "applied": applied,
+            "failed": failed,
+            "backup": str(backup),
+        }
+
+    def _series_rename_plan_entry(
+        self, book_id: int, old_series: str, new_series: str
+    ) -> dict[str, Any]:
+        """Build one book's series-rename plan row (SRENAME-01, SRENAME-07)."""
+        book = self._reader.get_book(book_id)
+        return {
+            "book_id": book_id,
+            "diff": self._build_diff(book, {"series": new_series}),
+            "series_index": book.series_index,
         }
 
     def merge_duplicate_group(
