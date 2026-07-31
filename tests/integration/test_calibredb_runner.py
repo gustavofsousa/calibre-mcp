@@ -104,7 +104,9 @@ def test_set_metadata_applies_list_field(runner, scratch_library, tmp_path):
 
 
 @pytest.mark.integration
-def test_set_metadata_authors_stay_distinct_not_mashed(runner, scratch_library, tmp_path):
+def test_set_metadata_authors_stay_distinct_not_mashed(
+    runner, scratch_library, tmp_path
+):
     # AD-022: authors join with " & ", not "," -- a "," join mashes two
     # co-authors into a single author entity ("A|B") instead of two.
     result = runner.add(_sample_epub(tmp_path))
