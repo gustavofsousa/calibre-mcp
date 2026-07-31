@@ -103,6 +103,13 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `OSError` into an `InvalidInputError` so the tool-layer error mapping (`_map_errors`, which only
   catches `CalibreMcpError`) stays whole. Established by BULK-03 (`folder-import`).
 
+- **AD-022 — `calibredb set_metadata` serializes authors with ` & `, other list fields with `,`.**
+  Establishes that the author field is separator-sensitive: `calibredb set_metadata --field
+  "authors:A,B"` creates a single author `"A|B"`, whereas `"authors:A & B"` creates two. The shared
+  write primitive (`CalibredbRunner.set_metadata`) therefore joins `authors` with `" & "` and
+  `tags`/`languages` with `","`. Corrects a latent multi-author bug that predated ORGN-01 (BULK-01's
+  author path was never exercised with more than one author). Established by ORGN-01 (`author-rename`).
+
 ## Backlog — deferred (post-P2)
 
 - (empty — STATS-01 + BULK-01 + BULK-02 + BULK-03 shipped; see Handoff. Remaining Phase-2 targets:
