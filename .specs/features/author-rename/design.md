@@ -1,7 +1,7 @@
 # Rename an Author Across the Library (ORGN-01) Design
 
 **Spec**: `.specs/features/author-rename/spec.md`
-**Status**: Implemented (AD-022 recorded); independent Verifier pending
+**Status**: Done — implemented, AD-022 recorded, independently Verified (PASS)
 
 ---
 

@@ -50,6 +50,12 @@ Seen once or not yet corroborated. Tracked, not trusted.
 - evidence: tests/integration/test_library_p2.py::test_convert_book_bogus_source_surfaces_error_and_adds_nothing (src/calibre_mcp/library.py:convert)
 - last seen: 2026-07-30T21:44:18Z
 
+### L-007 — Cover every spec-listed edge case with its own direct assertion instead of relying on another test's mechanism or by-construction correctness
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `tests` · harmful: 0
+- features: author-rename
+- evidence: .specs/features/author-rename/validation.md (Edge Cases: case-only rename; set-change token mismatch) (tests)
+- last seen: 2026-07-31T02:53:00Z
+
 ## Quarantined (failed when applied — ignore)
 
 A confirmed lesson that recurred alongside failure. Kept for the maintainer to review.

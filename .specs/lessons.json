@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 7,
+  "next_id": 8,
   "lessons": [
     {
       "id": "L-001",
@@ -112,6 +112,24 @@
       ],
       "created": "2026-07-30T21:44:18Z",
       "last_seen": "2026-07-30T21:44:18Z"
+    },
+    {
+      "id": "L-007",
+      "key": "spec_precision_gap::cover every spec listed edge case with its own direct assertion instead of relying on another test s mechanism or by construction correctness",
+      "text": "Cover every spec-listed edge case with its own direct assertion instead of relying on another test's mechanism or by-construction correctness",
+      "signal": "spec_precision_gap",
+      "scope": "tests",
+      "status": "candidate",
+      "features": [
+        "author-rename"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/author-rename/validation.md (Edge Cases: case-only rename; set-change token mismatch) (tests)"
+      ],
+      "created": "2026-07-31T02:53:00Z",
+      "last_seen": "2026-07-31T02:53:00Z"
     }
   ]
 }

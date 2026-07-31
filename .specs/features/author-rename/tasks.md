@@ -10,7 +10,8 @@ Implement these tasks with the `spec-driven` skill: **activate it by name and fo
 
 **Spec**: `.specs/features/author-rename/spec.md`
 **Design**: `.specs/features/author-rename/design.md`
-**Status**: All 6 tasks (T1-T6) implemented and committed; independent Verifier pending (Execute step 10)
+**Status**: Done — all 6 tasks (T1-T6) implemented, committed, and independently Verified (PASS,
+see `.specs/features/author-rename/validation.md`)
 
 ---
 

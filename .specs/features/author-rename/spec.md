@@ -166,20 +166,22 @@ consumed the old name.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| ARENAME-01 | P1: Rename via one reviewed call | Implementing | Implementing |
-| ARENAME-02 | P1: Rename via one reviewed call | Implementing | Implementing |
-| ARENAME-03 | P1: Rename via one reviewed call | Implementing | Implementing |
-| ARENAME-04 | P1: Rename via one reviewed call | Implementing | Implementing |
-| ARENAME-05 | P1: Rename via one reviewed call | Implementing | Implementing |
-| ARENAME-06 | P1: Rename via one reviewed call | Implementing | Implementing |
-| ARENAME-07 | P1: Co-author-safe replacement & merge | Implementing | Implementing |
-| ARENAME-08 | P1: Rename via one reviewed call | Implementing | Implementing |
+| ARENAME-01 | P1: Rename via one reviewed call | Verified | Verified |
+| ARENAME-02 | P1: Rename via one reviewed call | Verified | Verified |
+| ARENAME-03 | P1: Rename via one reviewed call | Verified | Verified |
+| ARENAME-04 | P1: Rename via one reviewed call | Verified | Verified |
+| ARENAME-05 | P1: Rename via one reviewed call | Verified | Verified |
+| ARENAME-06 | P1: Rename via one reviewed call | Verified | Verified |
+| ARENAME-07 | P1: Co-author-safe replacement & merge | Verified | Verified |
+| ARENAME-08 | P1: Rename via one reviewed call | Verified | Verified |
 
 **ID format:** `ARENAME-[NUMBER]`.
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
-**Coverage:** 8 total, 8 mapped to tasks (T1..T5), 0 Verified — independent Verifier run pending.
+**Coverage:** 8 total, 8 mapped to tasks (T1..T5), 8 Verified — independent Verifier PASS
+(`.specs/features/author-rename/validation.md`, 2026-07-30): 8/8 ACs matched spec-defined outcomes,
+build gate green (258 passed), discrimination sensor 3/3 killed.
 
 ---
 
