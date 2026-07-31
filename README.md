@@ -13,8 +13,8 @@ convert, deduplicate, remove, and email books, all with human-in-the-loop safety
 > I built this to stop clicking around the Calibre GUI and manage my library from a chat instead.
 > It's a personal project, and also a deliberate showcase of how I build backend/tooling systems:
 > hybrid I/O design, an explicit failure taxonomy, human-approval gates on every destructive
-> action, and a test suite that never touches real user data. See
-> [ARCHITECTURE.md](ARCHITECTURE.md) for the full design writeup.
+> action, and a test suite that never touches real user data. See [PRODUCT.md](PRODUCT.md) for
+> what it does and why, and [ARCHITECTURE.md](ARCHITECTURE.md) for the full design writeup.
 
 ## Why the hybrid design
 
@@ -110,10 +110,16 @@ all logs go to stderr, on purpose (see [ARCHITECTURE.md](ARCHITECTURE.md#stdout-
 | `get_book` | Full metadata for one book id. | read-only |
 | `find_duplicates` | Advisory report of likely-duplicate books by normalized (title, author). Never merges. | read-only |
 | `update_metadata` | Edit a whitelisted field set (title, authors, tags, series, rating, comments, …). | plan → confirm |
+| `update_metadata_bulk` | Broadcast a field change to N books in one batch (`list_mode` add/remove/replace). | plan → confirm (batch) |
 | `add_book` | Add a book from a local file path; surfaces duplicates honestly. | single-step (backed up) |
+| `import_folder` | Recursively import every ebook file found under a directory. | additive (backed up) |
 | `convert_book` | Convert to a new format (`epub`, `azw3`, `mobi`, `pdf`) — additive, keeps the original(s). | single-step (backed up) |
+| `convert_book_bulk` | Convert N books to one target format in one call. | additive (backed up) |
 | `remove_book` | **Recoverable** removal: trash copy + Calibre recycle bin, never a hard delete. | plan → confirm |
 | `email_book` | Email a book's file via `calibre-smtp`, picking the best format automatically. | plan → confirm |
+
+Plus one MCP **resource**, `calibre://library/stats` — an aggregate library profile (totals,
+format/language mix, metadata completeness, data-quality flags) readable without any tool call.
 
 Every tool's full contract (edge cases, error conditions, exact field whitelist) is documented in
 its docstring in [`server.py`](src/calibre_mcp/server.py) — those docstrings are what the LLM host
