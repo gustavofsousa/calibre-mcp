@@ -154,6 +154,26 @@ class SqliteReader:
             conn.close()
         return [r["book"] for r in rows]
 
+    def books_by_tag(self, name: str) -> list[int]:
+        """Return the ascending-sorted ids of every book carrying ``name`` by
+        exact match (TRENAME-01/02 discovery step).
+
+        Matches the same ``books_tags_link``/``tags`` join as ``_tags``. No
+        match returns ``[]`` (not an error) — the facade rejects that as "tag
+        not found" before any backup.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT l.book FROM books_tags_link l "
+                "JOIN tags t ON t.id = l.tag "
+                "WHERE t.name = ? ORDER BY l.book",
+                (name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["book"] for r in rows]
+
     @staticmethod
     def _require_int(book_id: int) -> None:
         if not isinstance(book_id, int) or isinstance(book_id, bool):

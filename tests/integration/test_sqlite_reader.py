@@ -110,6 +110,25 @@ def test_books_by_author_no_match_returns_empty_list(reader: SqliteReader):
 
 
 @pytest.mark.integration
+def test_books_by_tag_finds_every_book_ascending_sorted(reader: SqliteReader):
+    # TRENAME-01: "Poetry" tags books 9,15,17,19 (verified in the real
+    # library) -- returned ascending regardless of underlying link-table order.
+    assert reader.books_by_tag("Poetry") == [9, 15, 17, 19]
+
+
+@pytest.mark.integration
+def test_books_by_tag_finds_a_multi_tag_book(reader: SqliteReader):
+    # TRENAME-01: book 15 carries several tags incl. "Poetry"; it is found.
+    assert 15 in reader.books_by_tag("Poetry")
+
+
+@pytest.mark.integration
+def test_books_by_tag_no_match_returns_empty_list(reader: SqliteReader):
+    # TRENAME-02: a tag on no book returns [] (not an error).
+    assert reader.books_by_tag("Nonexistent Tag XYZ") == []
+
+
+@pytest.mark.integration
 def test_get_book_unknown_id_raises_not_found(reader: SqliteReader):
     # VIEW-02: missing id -> BookNotFoundError naming the id.
     with pytest.raises(BookNotFoundError) as excinfo:
