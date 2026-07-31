@@ -475,6 +475,72 @@ def test_rename_tag_not_found_is_tool_error(env: Path):
     assert "not found" in str(excinfo.value).lower()
 
 
+@pytest.fixture
+def series_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed two books: one in series 'Old' (index 7.5), one in 'Other'."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "old.epub")
+    shutil.copy2(sources[1], tmp_path / "other.epub")
+    old_id = runner.add(tmp_path / "old.epub").book_id
+    other_id = runner.add(tmp_path / "other.epub").book_id
+    assert old_id is not None and other_id is not None
+    runner.set_metadata(old_id, {"series": "Old", "series_index": 7.5})
+    runner.set_metadata(other_id, {"series": "Other", "series_index": 1.0})
+    return old_id, other_id
+
+
+@pytest.mark.e2e
+def test_rename_series_plan_then_apply_round_trip_preserves_index(
+    series_seeded: tuple[int, int],
+):
+    # SRENAME-01/04/07/08: plan (no token) -> per-book diff + token, no
+    # write; apply (token) -> writes the affected book, re-read reflects the
+    # rename WITH the original series_index preserved, unaffected book
+    # untouched.
+    old_id, other_id = series_seeded
+
+    plan = _call("rename_series", {"old_series": "Old", "new_series": "New"})
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == {old_id}
+    assert plan["diffs"][0]["diff"]["series"]["proposed"] == "New"
+    assert plan["diffs"][0]["series_index"] == 7.5
+    assert _call("get_book", {"book_id": old_id})["series"] == "Old"
+
+    applied = _call(
+        "rename_series",
+        {
+            "old_series": "Old",
+            "new_series": "New",
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "renamed"
+    assert applied["applied"] == [
+        {"book_id": old_id, "series": "New", "series_index": 7.5}
+    ]
+    assert applied["failed"] == []
+    assert _call("get_book", {"book_id": old_id})["series"] == "New"
+    assert _call("get_book", {"book_id": old_id})["series_index"] == 7.5
+    assert _call("get_book", {"book_id": other_id})["series"] == "Other"
+
+
+@pytest.mark.e2e
+def test_rename_series_not_found_is_tool_error(env: Path):
+    # SRENAME-02: a series on no book surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "rename_series",
+            {"old_series": "no-such-series", "new_series": "New"},
+        )
+
+    assert "not found" in str(excinfo.value).lower()
+
+
 # ---------------------------------------------------------------------- ADD
 
 

@@ -292,6 +292,43 @@ def rename_tag(
 
 @mcp.tool()
 @_map_errors
+def rename_series(
+    old_series: str,
+    new_series: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Rename a series across every book in it, two-step plan->confirm
+    (ORGN-04, SRENAME-01..08).
+
+    HOST: surface the returned per-book plan (each book's ``series``
+    current->proposed, with its unchanged ``series_index``) to the USER and
+    only re-call with ``confirmation_token`` after they approve.
+
+    ``old_series`` is matched EXACTLY (case-sensitive) against every book
+    whose series is that name. Without a token: nothing is written; discovers
+    every affected book and returns its ``series`` diff plus one deterministic
+    ``confirmation_token`` covering the whole batch. If ``old_series`` matches
+    no book, or ``new_series`` is blank/equal to ``old_series``, the call is
+    rejected before any backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then applies every
+    affected book best-effort in ``book_id`` order. The rename writes the
+    ``series`` field ONLY — each book's ``series_index`` (its position in the
+    series) is PRESERVED, never reset or renumbered. Renaming onto a series
+    name already in use MERGES the two (each book keeps its own index; index
+    collisions are left as-is, not renumbered). A single book's failure never
+    voids the batch; the result reports ``applied`` (with each book's re-read
+    resulting ``series``/``series_index``) and ``failed`` (with the error)
+    separately — never a false "all renamed". A mismatched token is refused
+    before any write.
+    """
+    return _jsonify(
+        _get_library().rename_series(old_series, new_series, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
 def add_book(path: str) -> dict:
     """Import an ebook file into the library by local filesystem path (ADD-01..04).
 
