@@ -22,6 +22,7 @@ from .config import Config, load_smtp_config
 from .confirmation import plan_token, verify
 from .ebook_convert_runner import EbookConvertRunner
 from .errors import BookNotFoundError, CalibreMcpError, InvalidInputError
+from .folder_scan import scan_ebook_files
 from .sqlite_reader import Book, SqliteReader
 
 # CONV-01: formats convert_book accepts as a target, and the device-preference
@@ -38,6 +39,11 @@ DEFAULT_LIMIT = 50
 # timeout); cap the batch so an accidental "convert everything" can't run for
 # an hour. Rejected as invalid input before any backup/convert.
 BULK_CONVERT_MAX = 50
+
+# BIMPORT-02: a folder import is a sequence of `calibredb add` subprocesses;
+# cap the ebook-candidate count (not every file under the folder) so pointing
+# at a huge tree is rejected before any backup/import.
+FOLDER_IMPORT_MAX = 500
 
 # The curation fields ``calibredb set_metadata`` supports (design §Data Models).
 # The facade validates every edit against this set before planning a change.
@@ -441,6 +447,74 @@ class CalibreLibrary:
             "book_id": result.book_id,
             "book": self._reader.get_book(result.book_id),
         }
+
+    def import_folder(self, path: str | Path) -> dict[str, Any]:
+        """Import every ebook file under a directory, recursively (BIMPORT-01..07).
+
+        Additive/no-token (AD-016), like ``add_book``. Rejects a non-directory
+        or an over-cap ebook-candidate count as invalid input **before** any
+        backup (BIMPORT-02), then takes exactly one ``metadata.db`` backup
+        before the loop (BIMPORT-03, unconditional even with zero candidates).
+        Each ``sorted`` candidate is imported best-effort via the shared
+        ``_import_one`` core and lands in exactly one of ``added`` /
+        ``duplicate`` / ``failed`` — a per-file failure never aborts the batch
+        (BIMPORT-04); ``len(added)+len(duplicate)+len(failed) ==
+        len(candidates)`` (BIMPORT-07).
+        """
+        folder = Path(path)
+        if not folder.is_dir():  # BIMPORT-02: reject before scan/backup
+            raise InvalidInputError(
+                f"import_folder: not an existing directory: {folder}"
+            )
+
+        candidates = self._safe_scan(folder)
+        if len(candidates) > FOLDER_IMPORT_MAX:  # BIMPORT-02: reject before backup
+            raise InvalidInputError(
+                f"too many ebook candidates: {len(candidates)} exceeds the "
+                f"{FOLDER_IMPORT_MAX}-file folder import cap"
+            )
+
+        backup = backup_metadata_db(  # BIMPORT-03: once, before the loop
+            self._config.db_path, self._config.backup_root
+        )
+
+        added: list[dict[str, Any]] = []
+        duplicate: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for file_path in candidates:
+            try:
+                result = self._import_one(file_path)
+                if result["duplicate"]:  # BIMPORT-05: surface, never hide
+                    duplicate.append({"path": str(file_path)})
+                else:  # BIMPORT-06: real id + metadata
+                    added.append(
+                        {
+                            "path": str(file_path),
+                            "book_id": result["book_id"],
+                            "book": result["book"],
+                        }
+                    )
+            except CalibreMcpError as exc:  # BIMPORT-04: never aborts the batch
+                failed.append({"path": str(file_path), "error": str(exc)})
+
+        return {
+            "status": "imported",
+            "added": added,
+            "duplicate": duplicate,
+            "failed": failed,
+            "backup": str(backup),
+        }
+
+    @staticmethod
+    def _safe_scan(folder: Path) -> list[Path]:
+        """Scan ``folder`` for ebook candidates, converting an ``OSError``
+        (e.g. unreadable directory) into ``InvalidInputError`` so it surfaces
+        cleanly through ``_map_errors`` (AD-021) rather than escaping unmapped.
+        """
+        try:
+            return scan_ebook_files(folder)
+        except OSError as exc:
+            raise InvalidInputError(f"cannot scan directory {folder}: {exc}") from exc
 
     def remove_book(self, book_id: int, token: str | None = None) -> dict[str, Any]:
         """Remove a book via the review->confirm handshake (REM-01..05).
