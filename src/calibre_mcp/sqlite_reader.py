@@ -340,6 +340,37 @@ class SqliteReader:
             files[row["format"]] = file_path
         return files
 
+    def cover_file(self, book_id: int) -> Path | None:
+        """Resolve a book's on-disk ``cover.jpg`` path, keyed on
+        ``books.has_cover`` (RCOVER-01..04). Cover-scoped sibling of
+        ``format_files``.
+
+        ``has_cover`` falsy -> ``None`` (no cover, a normal state). Unknown
+        id -> ``BookNotFoundError``. ``has_cover`` true but ``cover.jpg``
+        missing on disk -> ``InvalidInputError`` (metadata<->disk
+        inconsistency), mirroring ``format_files`` rather than silently
+        degrading to "no cover".
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT path, has_cover FROM books WHERE id = ?", (book_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            raise BookNotFoundError(book_id)
+        if not row["has_cover"]:
+            return None
+
+        cover = self._library_path / row["path"] / "cover.jpg"
+        if not cover.is_file():
+            raise InvalidInputError(
+                f"cover file for book {book_id} not found on disk: {cover}"
+            )
+        return cover
+
     def library_stats(self) -> LibraryStats:
         """Compute the aggregate baseline profile of the library (STATS-01).
 
