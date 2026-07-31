@@ -19,6 +19,21 @@ This file is roadmap-only (Phase / Capability / Phase-gate, per the product-voca
 convention) — it never becomes a tracked issue by itself. Each Phase below spawns Features, and
 each Feature gets its own `.specs/features/[feature]/spec.md` when picked up.
 
+### Two tracks, gated independently
+
+This roadmap holds **two parallel tracks** — don't sequence one behind the other:
+
+- **Feature track (Phase 0–6)** — what calibre-mcp *does*. Advanced by picking the next feature and
+  Specify→Design→Tasks→Execute. Bounded only by effort/appetite.
+- **Strategic track (Phase A/B/C)** — what the work is *for* beyond a personal tool (AD-023). Each
+  phase is gated on a real-world signal (A→B needs the repo *discovered*; B→C needs a *paid*
+  signal). **Do not start B or C before its gate opens.** Full block at the end, under *Strategic
+  Horizon*.
+
+The feature track is always available to push on; the strategic track waits for its gates. So "what
+do I build next?" is answered by the feature track (currently: **Phase 3**), regardless of where the
+strategic track is parked.
+
 ---
 
 ## Phase 0 — Core Curation Loop (SHIPPED)
@@ -98,6 +113,16 @@ effort, not bundled with routine-curation work.
 **Phase-gate (KPI): ✅ MET.** A full curation session (retag a batch, fix an author's name
 everywhere, resolve a duplicate group, import a folder of new books) never requires opening the
 Calibre GUI.
+
+**Follow-on gap identified 2026-07-31 (not part of the closed gate — cheap to add):**
+
+- **ORGN-04 — Rename/merge a series across the library.** The organization triad AD-019 names is
+  *author/tag/**series***; ORGN-01/02/03 shipped author-rename, tag-rename, and duplicate-merge, but
+  **series was never covered.** This is the missing sibling of ORGN-01/02: it becomes the *third*
+  consumer of the already-generalized `rename_resolve.resolve_renamed_values` (author + tag today),
+  applied through the AD-020 batch pattern — **no new mutation primitive, no new algebra.** Small,
+  pattern-consistent, closes the AD-019 organization triad. A natural pick-up either as a Phase 2
+  addendum or slotted right after Phase 3's covers pair.
 
 ---
 
@@ -225,6 +250,16 @@ via the same sibling-runner pattern as `CalibredbRunner`/`EbookConvertRunner`/`C
   acceptable or whether restore is descoped to "recover the file, re-add manually."
 - **MAINT-03 — Export books to a folder.** Wraps `calibredb export` (save-to-disk equivalent) —
   pure file copy-out, no `metadata.db` mutation.
+- **MAINT-04 — List & restore a `metadata.db` backup (roll back a bad edit).** AD-011 already keeps
+  the last 20 pre-write `metadata.db` snapshots, but they're invisible and unusable from the host: a
+  wrong bulk edit leaves 20 rollback points and no host-driven way to see or apply one. A read-only
+  `list_backups` (timestamp + what op it preceded, if recoverable) plus a **plan→confirm** `restore_backup`
+  that swaps the live `metadata.db` for a chosen snapshot — itself backing up the current state
+  first, so restore is never a one-way door. **This directly operationalizes the "safe writes"
+  brand (Phase A): the safety net becomes usable, not just present.** Highest-value maintenance item
+  for that reason. Gated hard (AD-012) — restoring `metadata.db` rewrites the whole library state,
+  so the plan must show *exactly* what era you're rolling back to. (Supersedes Phase 6's
+  "backup-retention visibility" note, which was only a warning, not a restore path.)
 
 **Phase-gate (KPI):** integrity issues and recovery are always answerable/actionable from the MCP;
 zero manual `calibredb`/GUI intervention needed for these tasks.
@@ -268,22 +303,32 @@ action.
 1. **STATS-01** (Phase 1) — ✅ Shipped & Verified.
 2. **Phase 2 (Bulk Ops & Organization)** — ✅ Shipped & Verified in full (2026-07-31): BULK-01/02/03
    + ORGN-01/02/03, all independently Verified. Phase-gate met.
-3. **Phase 3 (Covers & Enrichment)** — next Specify target. First feature needing a new
-   outbound-network AD.
-4. **Phase 4 (Maintenance)** — check_library/restore/export, same low-risk runner pattern as
-   Phase 2.
-5. **Phase 5 (Device)** — needs the `calibredb saveto` research spike.
-6. **Phase 6** — no dedicated slot; absorbed opportunistically.
+3. **Phase 3 (Covers & Enrichment)** — ← **next Specify target.** Sub-order within the phase:
+   **COVER-01** (read cover, pure FS read, no new dependency) → **COVER-02** (set cover, local
+   mutation) — this already meets *half* the phase-gate ("every book has a viewable cover") with
+   zero new architecture — → then the **ENRICH** cluster, treating the first outbound network call
+   as a deliberate hardening effort with its own AD (timeout/offline/rate-limit).
+4. **ORGN-04 (series rename/merge)** — cheap follow-on closing the AD-019 organization triad;
+   pull in as a Phase 2 addendum or right after Phase 3's covers pair.
+5. **Phase 4 (Maintenance)** — check_library/restore/export + **MAINT-04 metadata rollback** (the
+   highest-value item: makes the AD-011 safety net host-usable, reinforcing the Phase A brand).
+6. **Phase 5 (Device)** — needs the `calibredb saveto` research spike.
+7. **Phase 6** — no dedicated slot; absorbed opportunistically.
 
 This order front-loads the safest, most-reused, highest-frequency wins (Phase 2) and saves the
 genuinely new architectural surface (outbound network in Phase 3, device I/O in Phase 5) for after
 that foundation and its lessons are in place.
 
+**Strategic track (A/B/C) runs in parallel, not in this queue.** Phase A is active; **Gate A→B is
+still closed** (repo pushed but not yet listed in an MCP directory or announced), so Phase B is not
+a build target yet — pushing on the feature queue above is the right use of development time now.
+
 ## Explicitly not on this roadmap
 
 | Item | Reason |
 | --- | --- |
-| PyPI packaging, install docs, multi-library config | "Open source" horizon, explicitly not chosen (AD-018). |
+| Multi-library config (one server ⇒ many libraries) | Single-library model stands (AD-007); out of scope even under AD-023. |
+| ~~PyPI packaging / install docs~~ | **No longer excluded (AD-023 reversed AD-018).** `uvx --from git+…` install shipped in Phase A; PyPI publish is an *optional* checkpointed door in Phase A, not a "never." |
 | Any AI/LLM orchestration inside the server | AD-006 keeps intelligence in the host; calibre-mcp stays a clean tool/resource surface. |
 | The Calibre e-book viewer / built-in ebook editor | Reading and in-place content editing are out of an MCP tool surface's reach — not a metadata/orchestration task. |
 | Calibre-Web / content-server orchestration (WEB-01) | Deferred inside Phase 5 — usually a separate always-on service, low priority for a single user. |
