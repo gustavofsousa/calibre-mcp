@@ -104,6 +104,20 @@ def test_set_metadata_applies_list_field(runner, scratch_library, tmp_path):
 
 
 @pytest.mark.integration
+def test_set_metadata_authors_stay_distinct_not_mashed(runner, scratch_library, tmp_path):
+    # AD-022: authors join with " & ", not "," -- a "," join mashes two
+    # co-authors into a single author entity ("A|B") instead of two.
+    result = runner.add(_sample_epub(tmp_path))
+
+    runner.set_metadata(result.book_id, {"authors": ["Author One", "Author Two"]})
+
+    book = SqliteReader(scratch_library / "metadata.db", scratch_library).get_book(
+        result.book_id
+    )
+    assert book.authors == ["Author One", "Author Two"]
+
+
+@pytest.mark.integration
 def test_remove_deletes_book_from_library(runner, scratch_library, tmp_path):
     # REM-02: after remove, the book is gone from the library.
     result = runner.add(_sample_epub(tmp_path))
