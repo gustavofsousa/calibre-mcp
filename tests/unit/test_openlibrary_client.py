@@ -247,3 +247,77 @@ def test_download_cover_honors_custom_dest_dir(tmp_path) -> None:
     path = OpenLibraryClient(http_get=fake).download_cover(_COVER_L, dest_dir=tmp_path)
 
     assert path.parent == tmp_path
+
+
+class _FakeResponse:
+    """Minimal context-manager response for a monkeypatched urlopen."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._data
+
+
+@pytest.mark.unit
+def test_urllib_get_sets_user_agent_and_default_timeout(monkeypatch) -> None:
+    # LOOKUP-10: the real transport identifies itself with a descriptive User-Agent
+    # and applies the bounded default 10s timeout. Drives the default _urllib_get
+    # (no injected seam) against a fake urlopen.
+    from calibre_mcp.openlibrary_client import _DEFAULT_UA
+
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        captured["ua"] = request.get_header("User-agent")
+        captured["timeout"] = timeout
+        return _FakeResponse(b"payload")
+
+    monkeypatch.setattr(
+        "calibre_mcp.openlibrary_client.urllib.request.urlopen", fake_urlopen
+    )
+    result = OpenLibraryClient()._fetch("https://openlibrary.org/thing")
+
+    assert result == b"payload"
+    assert captured["ua"] == _DEFAULT_UA
+    assert captured["timeout"] == 10.0
+
+
+@pytest.mark.unit
+def test_urllib_get_wraps_urlerror_as_enrichment_error(monkeypatch) -> None:
+    # LOOKUP-08: a transport (URLError) failure in the real call site becomes an
+    # EnrichmentSourceError, not a raw urllib error. retries=0 keeps it to one call.
+    import urllib.error
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        raise urllib.error.URLError("unreachable")
+
+    monkeypatch.setattr(
+        "calibre_mcp.openlibrary_client.urllib.request.urlopen", fake_urlopen
+    )
+    with pytest.raises(EnrichmentSourceError):
+        OpenLibraryClient(retries=0)._fetch("https://openlibrary.org/thing")
+
+
+@pytest.mark.unit
+def test_urllib_get_wraps_httperror_with_status_code(monkeypatch) -> None:
+    # LOOKUP-08: an HTTP >= 400 becomes an EnrichmentSourceError naming the status.
+    import urllib.error
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        raise urllib.error.HTTPError(
+            "https://openlibrary.org/thing", 503, "Service Unavailable", {}, None
+        )
+
+    monkeypatch.setattr(
+        "calibre_mcp.openlibrary_client.urllib.request.urlopen", fake_urlopen
+    )
+    with pytest.raises(EnrichmentSourceError) as excinfo:
+        OpenLibraryClient(retries=0)._fetch("https://openlibrary.org/thing")
+    assert "503" in str(excinfo.value)

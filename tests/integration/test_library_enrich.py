@@ -142,6 +142,24 @@ def _db_digest(scratch_library: Path) -> str:
 
 
 @pytest.mark.integration
+def test_isbn_with_hyphens_and_lowercase_x_is_normalized_end_to_end(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # spec Edge Case + LOOKUP-01: a hyphenated, lower-case-`x` ISBN is normalized
+    # (strip non-alphanumerics, upper-case) both when queried and when echoed back.
+    book_id = _seed_empty_book(scratch_library)
+    runner = CalibredbRunner(scratch_library)
+    runner.set_metadata(book_id, {"identifiers": "isbn:0-8044-2957-x"})
+    enricher = _FakeEnricher(OpenLibraryRecord("Bantam", "2009", "Desc", None))
+    facade._enricher = enricher
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert enricher.received_isbn == "080442957X"  # normalized before the lookup
+    assert result["identifier_used"] == {"type": "isbn", "value": "080442957X"}
+
+
+@pytest.mark.integration
 def test_happy_path_proposes_gaps_and_leaves_library_unchanged(
     facade: CalibreLibrary, scratch_library: Path
 ) -> None:
