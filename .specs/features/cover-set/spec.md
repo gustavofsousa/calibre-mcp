@@ -148,13 +148,13 @@ assert the plan now shows `current_has_cover: true` and the apply replaces the c
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| SCOVER-01 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
-| SCOVER-02 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
-| SCOVER-03 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
-| SCOVER-04 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
-| SCOVER-05 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
-| SCOVER-06 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
-| SCOVER-07 | P1: Set/replace a cover via one reviewed call | Implementing | Implementing |
+| SCOVER-01 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
+| SCOVER-02 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
+| SCOVER-03 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
+| SCOVER-04 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
+| SCOVER-05 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
+| SCOVER-06 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
+| SCOVER-07 | P1: Set/replace a cover via one reviewed call | Verified | Verified |
 
 **ID format:** `SCOVER-[NUMBER]`.
 

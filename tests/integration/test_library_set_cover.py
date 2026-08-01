@@ -226,7 +226,7 @@ def test_set_cover_non_image_extension_rejected_before_backup(
 
 @pytest.mark.integration
 def test_set_cover_unknown_book_id_raises_not_found(
-    facade: CalibreLibrary, tmp_path: Path
+    facade: CalibreLibrary, backup_root: Path, tmp_path: Path
 ):
     # SCOVER-04: an unknown book id is rejected before any backup/write.
     image = _valid_cover_png(tmp_path / "cover.png")
@@ -235,6 +235,7 @@ def test_set_cover_unknown_book_id_raises_not_found(
         facade.set_cover(999999, str(image))
 
     assert excinfo.value.book_id == 999999
+    assert _snapshots(backup_root) == []
 
 
 # ---------------------------------------------------------------- SCOVER-06
