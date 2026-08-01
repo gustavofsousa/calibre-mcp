@@ -165,6 +165,28 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   asserted" pattern) — it just was never observed catching a decode failure in practice, since that
   case already fails loudly on its own.
 
+- **AD-026 — First outbound-network policy: HTTP is a fourth I/O kind, confined and bounded.**
+  Established by ENRICH-01 (`identifier-lookup`), the project's first outbound network call.
+  **Context:** ENRICH-01 looks up gap-filling metadata from Open Library keyed on a book's ISBN —
+  the first time the server reaches the internet. This does NOT revise AD-002/003: those keep the
+  *transport* local stdio with no listening surface; this is an *outbound* GET the tool makes
+  per-call, user-initiated (the tool call is the opt-in), sending only the ISBN (no secrets, no PII).
+  **Decision:** all HTTP + cover-download I/O lives in one dedicated sibling module
+  (`openlibrary_client.py`); the facade *orchestrates* but never *performs* the network I/O —
+  extending the "one module per external I/O kind" invariant (AD-014 CLIs, AD-021 filesystem walk)
+  to name **HTTP** as the fourth kind. Every request is bounded — default 10 s timeout + **at most
+  one retry** — so the stdio server can never hang; every transport / HTTP ≥ 400 / parse failure
+  maps to a single `EnrichmentSourceError` (a `CalibreMcpError`, so `_map_errors` turns it into a
+  clean `ToolError`) — never a crash, never partial state. The client takes an injectable `http_get`
+  seam so **tests never touch the real Open Library** — the network analog of the never-touch-the-
+  real-library write rule, non-negotiable. Covers are fetched via the non-rate-limited cover-**id**
+  URL (id/OLID are exempt from Open Library's 100-req / 5-min limit; by-ISBN is not). **Consequences:**
+  the lookup is read-only — no plan→confirm gate, no backup, nothing is written (applying is
+  ENRICH-02 / COVER-02, which gate); a failed cover or description follow-up is **non-fatal**
+  (best-effort) so a failed image never loses the core text proposal; stdlib `urllib.request` covers
+  the GETs with no new dependency (keeps the single-dep `uvx` install, AD-023). **Numbering:** AD-025
+  was taken by COVER-02, so this is AD-026.
+
 ## Backlog — deferred (post-P2)
 
 - (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03/04 all shipped & Verified;
@@ -273,7 +295,20 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   SPEC_DEVIATION: a genuine decode failure was empirically found — and independently reproduced by
   the Verifier — to raise loudly, `CalibredbError`, not silently no-op as design.md assumed).
   **Phase-3 covers pair now closed** (COVER-01 + COVER-02 both Shipped & Verified).
-- **Next:** check `.specs/ROADMAP.md` for what's next in Phase 3 (Covers & Metadata Enrichment).
+- **ENRICH-01** (`identifier-lookup`, Phase 3 — the project's first outbound-network feature):
+  `enrich_from_identifier` — a **read-only** ISBN lookup that proposes gap-filling
+  `comments`/`publisher`/`pubdate` from Open Library plus a downloaded cover, writing NOTHING (the
+  advisory precedent of `find_duplicates`, AD-016). New sibling module `openlibrary_client.py` (the
+  sole outbound-I/O site: Books API + edition→work description follow-up + cover-id download,
+  bounded 10 s timeout + ≤1 retry, injectable `http_get` seam so tests never hit the real network),
+  new `EnrichmentSourceError` in the taxonomy, `CalibreLibrary.enrich_from_identifier` facade
+  (gap-only proposal reusing the `0101-01-01%` placeholder-pubdate rule + `cover_file` COVER-01),
+  and the `enrich_from_identifier` MCP tool. New **AD-026** (first outbound-network policy). T1–T7
+  implemented; 25 new tests (14 unit + 11 integration) + 3 e2e, full suite 357 passed, mypy + ruff
+  clean. **Independent Verifier pending** — traceability held at *Implementing* until PASS.
+- **Next:** run the independent Verifier for ENRICH-01, then close out its traceability → Verified.
+  After that, check `.specs/ROADMAP.md` for what's next in Phase 3 (Metadata Enrichment: ENRICH-02
+  apply, ENRICH-03 batch).
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
