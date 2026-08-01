@@ -288,6 +288,50 @@ def test_read_cover_unknown_id_is_tool_error(env: Path):
     assert "999999" in str(excinfo.value)
 
 
+@pytest.mark.e2e
+def test_set_cover_plan_then_apply_round_trip(env: Path, tmp_path: Path):
+    # SCOVER-01/05: plan (no token) -> current_has_cover False + token, no
+    # write; apply (token) -> has_cover flips True with a cover_path, and a
+    # fresh get_book/read_cover confirms the change persisted.
+    book_id = _seed_empty_book(env)
+    image = _valid_cover_png(tmp_path / "cover.png")
+
+    plan = _call("set_cover", {"book_id": book_id, "image_path": str(image)})
+    assert plan["status"] == "plan"
+    assert plan["current_has_cover"] is False
+    assert plan["confirmation_token"]
+
+    applied = _call(
+        "set_cover",
+        {
+            "book_id": book_id,
+            "image_path": str(image),
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "applied"
+    assert applied["has_cover"] is True
+    assert applied["cover_path"] and Path(applied["cover_path"]).name == "cover.jpg"
+    # independent round trip through the read side of the tool surface
+    # (RCOVER-01): a covered book returns viewable image content, not JSON.
+    content = _call_raw("read_cover", {"book_id": book_id})
+    assert len(content) == 1
+    assert isinstance(content[0], ImageContent)
+    assert content[0].mimeType == "image/jpeg"
+
+
+@pytest.mark.e2e
+def test_set_cover_missing_path_is_tool_error(env: Path, tmp_path: Path):
+    # SCOVER-02: a nonexistent image_path is a clear tool error, not a silent
+    # no-op -- calibredb itself would silently ignore a bad path.
+    book_id = _seed_empty_book(env)
+    missing = tmp_path / "does-not-exist.png"
+
+    with pytest.raises(ToolError):
+        _call("set_cover", {"book_id": book_id, "image_path": str(missing)})
+
+
 # --------------------------------------------------------------------- EDIT
 
 

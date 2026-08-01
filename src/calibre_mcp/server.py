@@ -184,6 +184,41 @@ def read_cover(book_id: int) -> Any:
 
 @mcp.tool()
 @_map_errors
+def set_cover(
+    book_id: int,
+    image_path: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Set a book's cover from a LOCAL image file, two-step plan->confirm
+    (COVER-02, SCOVER-01..07).
+
+    HOST: surface the returned plan (whether the book currently has a cover --
+    replace vs add -- and the resolved image path) to the USER and only
+    re-call with ``confirmation_token`` after they approve.
+
+    ``image_path`` must be a LOCAL filesystem path to an existing image file
+    (.jpg/.jpeg/.png/.webp/.gif/.bmp) -- not a URL, not raw image bytes.
+    Without a token: nothing is written; validates the book exists and the
+    image file is valid, then returns ``current_has_cover`` (true means this
+    call will REPLACE the existing cover, not add a new one) plus a
+    deterministic ``confirmation_token``. A missing/unreadable path or an
+    unsupported extension is rejected here, before any backup -- calibredb
+    would otherwise silently do nothing on a bad path.
+
+    With a matching token: backs up ``metadata.db`` once, sets the cover via
+    ``calibredb set_metadata``, then RE-READS the book's cover state and
+    returns ``has_cover`` + ``cover_path`` -- the change is demonstrated, not
+    just assumed, so a write calibredb could not actually apply surfaces
+    truthfully rather than as a fake success. A mismatched token is refused
+    before any write.
+    """
+    return _jsonify(
+        _get_library().set_cover(book_id, image_path, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
 def update_metadata(
     book_id: int,
     fields: dict[str, Any],
