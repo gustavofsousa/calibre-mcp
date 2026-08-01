@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from calibre_mcp.errors import EnrichmentSourceError
-from calibre_mcp.openlibrary_client import OpenLibraryClient
+from calibre_mcp.openlibrary_client import OpenLibraryClient, OpenLibraryRecord
 
 
 class _Spy:
@@ -75,3 +75,140 @@ def test_retries_zero_makes_no_retry() -> None:
     with pytest.raises(EnrichmentSourceError):
         client._fetch("https://openlibrary.org/x")
     assert len(spy.calls) == 1
+
+
+class _RoutingFake:
+    """A URL-routing ``http_get`` seam: matches a URL substring to an outcome.
+
+    Order-independent (routes by URL, not call sequence) so each test states only
+    the endpoints it exercises; ``calls`` records every URL for follow-up-count
+    assertions. An unrouted URL fails loudly rather than silently returning junk.
+    """
+
+    def __init__(self, routes: list[tuple[str, object]]) -> None:
+        self.calls: list[str] = []
+        self._routes = routes
+
+    def __call__(self, url: str, timeout: float) -> bytes:
+        self.calls.append(url)
+        for substring, outcome in self._routes:
+            if substring in url:
+                if isinstance(outcome, Exception):
+                    raise outcome
+                assert isinstance(outcome, bytes)
+                return outcome
+        raise AssertionError(f"unexpected url: {url}")
+
+
+_ISBN = "9780553293357"
+_COVER_L = "https://covers.openlibrary.org/b/id/12345-L.jpg"
+_BOOKS_NO_DESC = (
+    b'{"ISBN:9780553293357": {"publishers": [{"name": "Bantam"}], '
+    b'"publish_date": "April 2009", '
+    b'"cover": {"small": "https://covers.openlibrary.org/b/id/12345-S.jpg", '
+    b'"medium": "https://covers.openlibrary.org/b/id/12345-M.jpg", '
+    b'"large": "https://covers.openlibrary.org/b/id/12345-L.jpg"}}}'
+)
+_EDITION = b'{"works": [{"key": "/works/OL456W"}]}'
+
+
+@pytest.mark.unit
+def test_fetch_record_happy_books_plus_work_follow_up() -> None:
+    # LOOKUP-04: Books API (no description) -> edition -> work supplies the
+    # description; the whole record is returned with every field populated.
+    fake = _RoutingFake(
+        [
+            ("api/books", _BOOKS_NO_DESC),
+            ("/isbn/", _EDITION),
+            ("/works/", b'{"description": "A sprawling space opera."}'),
+        ]
+    )
+    record = OpenLibraryClient(http_get=fake).fetch_record(_ISBN)
+
+    assert record == OpenLibraryRecord(
+        publisher="Bantam",
+        pubdate="April 2009",
+        description="A sprawling space opera.",
+        cover_url=_COVER_L,
+    )
+
+
+@pytest.mark.unit
+def test_fetch_record_flattens_object_form_description() -> None:
+    # LOOKUP-04 edge: the work description in the {"type","value"} object form is
+    # flattened to its string.
+    fake = _RoutingFake(
+        [
+            ("api/books", _BOOKS_NO_DESC),
+            ("/isbn/", _EDITION),
+            ("/works/", b'{"description": {"type": "t", "value": "Object desc."}}'),
+        ]
+    )
+    record = OpenLibraryClient(http_get=fake).fetch_record(_ISBN)
+
+    assert record is not None
+    assert record.description == "Object desc."
+
+
+@pytest.mark.unit
+def test_fetch_record_no_follow_up_when_description_present_in_structured() -> None:
+    # Description already on the structured record -> NO edition/work follow-up
+    # (exactly one GET made).
+    books_with_desc = (
+        b'{"ISBN:9780553293357": {"publishers": [{"name": "Bantam"}], '
+        b'"publish_date": "2009", "description": "Inline desc."}}'
+    )
+    fake = _RoutingFake([("api/books", books_with_desc)])
+    record = OpenLibraryClient(http_get=fake).fetch_record(_ISBN)
+
+    assert record is not None
+    assert record.description == "Inline desc."
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.unit
+def test_fetch_record_clean_not_found_returns_none() -> None:
+    # LOOKUP-07: an empty Books API body (unknown ISBN) is a normal negative -> None.
+    fake = _RoutingFake([("api/books", b"{}")])
+    assert OpenLibraryClient(http_get=fake).fetch_record(_ISBN) is None
+
+
+@pytest.mark.unit
+def test_fetch_record_unparseable_body_raises_enrichment_error() -> None:
+    # LOOKUP-08: a non-JSON Books API body is a source failure, not a silent None.
+    fake = _RoutingFake([("api/books", b"<html>oops</html>")])
+    with pytest.raises(EnrichmentSourceError):
+        OpenLibraryClient(http_get=fake).fetch_record(_ISBN)
+
+
+@pytest.mark.unit
+def test_fetch_record_failed_description_follow_up_is_non_fatal() -> None:
+    # LOOKUP-04 non-fatal: the description hop failing leaves description None but
+    # still returns the publisher/pubdate already fetched.
+    fake = _RoutingFake(
+        [
+            ("api/books", _BOOKS_NO_DESC),
+            ("/isbn/", EnrichmentSourceError("edition unreachable")),
+        ]
+    )
+    record = OpenLibraryClient(http_get=fake).fetch_record(_ISBN)
+
+    assert record is not None
+    assert record.description is None
+    assert record.publisher == "Bantam"
+    assert record.pubdate == "April 2009"
+
+
+@pytest.mark.unit
+def test_fetch_record_cover_falls_back_to_smaller_when_large_absent() -> None:
+    # cover-id URL is the "largest available": with only a small present, use it.
+    books = (
+        b'{"ISBN:9780553293357": {"publishers": [{"name": "Bantam"}], '
+        b'"publish_date": "2009", "description": "d", '
+        b'"cover": {"small": "https://covers.openlibrary.org/b/id/9-S.jpg"}}}'
+    )
+    fake = _RoutingFake([("api/books", books)])
+    record = OpenLibraryClient(http_get=fake).fetch_record(_ISBN)
+
+    assert record is not None
+    assert record.cover_url == "https://covers.openlibrary.org/b/id/9-S.jpg"

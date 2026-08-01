@@ -9,12 +9,21 @@ and every request is bounded by a timeout + at most one retry (LOOKUP-10).
 
 from __future__ import annotations
 
+import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from .errors import EnrichmentSourceError
+
+# Open Library endpoints (verified live 2026-07-31, design §Research notes):
+# the structured Books API for publisher/pubdate/cover, then the edition->work
+# hop for the description (the 71%-gap field the Books API omits, LOOKUP-04).
+_BOOKS_API = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
+_EDITION_URL = "https://openlibrary.org/isbn/{isbn}.json"
+_WORK_URL = "https://openlibrary.org{work_key}.json"
 
 # Descriptive User-Agent so Open Library can attribute traffic (LOOKUP-10).
 _DEFAULT_UA = "calibre-mcp/enrich (+https://github.com/gustavofsousa/calibre-mcp)"
@@ -90,3 +99,96 @@ class OpenLibraryClient:
                 last_error = exc
         assert last_error is not None  # the loop body always runs at least once
         raise last_error
+
+    def fetch_record(self, isbn: str) -> OpenLibraryRecord | None:
+        """Fetch Open Library metadata for ``isbn`` (LOOKUP-04/07/08).
+
+        One GET to the Books API for publisher / raw ``publish_date`` / cover-id
+        URL; when that structured record carries no description, a best-effort
+        edition->work follow-up supplies it (LOOKUP-04). A clean empty response
+        (the ISBN is unknown) returns ``None`` (LOOKUP-07); an unparseable Books
+        API body raises ``EnrichmentSourceError`` (LOOKUP-08). A failed
+        description follow-up is non-fatal: publisher/pubdate are still returned.
+        """
+        books_url = _BOOKS_API.format(isbn=isbn)
+        entry = self._parse_json(self._fetch(books_url), books_url).get(f"ISBN:{isbn}")
+        if not entry:
+            return None  # clean not-found (LOOKUP-07)
+
+        description = self._flatten_description(entry.get("description"))
+        if description is None:
+            description = self._fetch_work_description(isbn)  # non-fatal (LOOKUP-04)
+        return OpenLibraryRecord(
+            publisher=self._first_publisher(entry),
+            pubdate=entry.get("publish_date"),
+            description=description,
+            cover_url=self._cover_id_url(entry),
+        )
+
+    def _fetch_work_description(self, isbn: str) -> str | None:
+        """Follow edition->work for the description; any failure -> ``None``.
+
+        Best-effort by design (a failed description follow-up must not lose the
+        core metadata proposal): a transport, parse, or shape problem anywhere
+        along the hop simply yields ``None``.
+        """
+        try:
+            edition = self._parse_json(self._fetch(_EDITION_URL.format(isbn=isbn)), "")
+            works = edition.get("works")
+            if not isinstance(works, list) or not works:
+                return None
+            work_key = works[0].get("key") if isinstance(works[0], dict) else None
+            if not isinstance(work_key, str) or not work_key:
+                return None
+            work_url = _WORK_URL.format(work_key=work_key)
+            work = self._parse_json(self._fetch(work_url), "")
+            return self._flatten_description(work.get("description"))
+        except EnrichmentSourceError:
+            return None
+
+    @staticmethod
+    def _parse_json(raw: bytes, url: str) -> dict[str, Any]:
+        """Decode a JSON object; a non-object/undecodable body is a source error."""
+        try:
+            value = json.loads(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise EnrichmentSourceError(f"unparseable response: {exc}", url) from exc
+        if not isinstance(value, dict):
+            raise EnrichmentSourceError("unexpected non-object response", url)
+        return value
+
+    @staticmethod
+    def _flatten_description(description: object) -> str | None:
+        """Normalize Open Library's string-or-``{"value": ...}`` description shape."""
+        if isinstance(description, str):
+            return description or None
+        if isinstance(description, dict):
+            value = description.get("value")
+            return value if isinstance(value, str) and value else None
+        return None
+
+    @staticmethod
+    def _first_publisher(entry: dict[str, Any]) -> str | None:
+        """First publisher name from the Books API ``publishers:[{name}]`` list."""
+        publishers = entry.get("publishers")
+        if isinstance(publishers, list) and publishers:
+            first = publishers[0]
+            name = first.get("name") if isinstance(first, dict) else None
+            return name if isinstance(name, str) and name else None
+        return None
+
+    @staticmethod
+    def _cover_id_url(entry: dict[str, Any]) -> str | None:
+        """Largest available cover URL from the Books API ``cover`` object.
+
+        Those URLs are the cover-**id** form (``.../b/id/<id>-<S|M|L>.jpg``),
+        which is not rate-limited (design Research notes) — prefer the largest.
+        """
+        cover = entry.get("cover")
+        if not isinstance(cover, dict):
+            return None
+        for size in ("large", "medium", "small"):
+            url = cover.get(size)
+            if isinstance(url, str) and url:
+                return url
+        return None
