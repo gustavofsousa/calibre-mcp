@@ -147,6 +147,24 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   annotation differs from the design doc. Future non-text tool results should default straight to
   `-> Any` rather than a real `Image | dict` union.
 
+- **AD-025 — Dedicated `set_cover` tool, not a field on `update_metadata`.** Established by
+  COVER-02 (`set_cover`). A cover's value is a **filesystem image path**, not a metadata string —
+  it needs different validation (`is_file()` + an image-extension whitelist) and a replace-vs-add
+  plan (`current_has_cover`, reusing `cover_file` from AD-024/COVER-01), so folding it into
+  `update_metadata`'s string-field whitelist would mix a path-typed input into a string editor and
+  complicate that tool's diff/validation. **The durable lesson**: `calibredb set_metadata --field
+  cover:<path>` **silently no-ops on a missing/unreadable path** (verified) — cover-setting MUST
+  pre-validate the file exists (`is_file()` + extension) before any backup/write, and MUST re-read
+  the cover state after apply to demonstrate the result, never assert it. **SPEC_DEVIATION from
+  design.md's Risks table:** the design additionally assumed a *decoded* bad image (valid
+  extension, undecodable content) would also silently no-op the same way, needing the identical
+  re-read defense. Empirically verified 2026-07-31 this is not what happens — a genuine decode
+  failure makes `calibredb` crash with a non-zero exit (`CalibredbError` propagates loudly, does
+  NOT silently no-op); only the missing-path case is silent. The re-read-to-demonstrate discipline
+  is still correct practice (defense in depth, matches the sibling mutations' "demonstrated not
+  asserted" pattern) — it just was never observed catching a decode failure in practice, since that
+  case already fails loudly on its own.
+
 ## Backlog — deferred (post-P2)
 
 - (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03/04 all shipped & Verified;
@@ -231,27 +249,37 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   3/3 discrimination-sensor mutants killed, `.specs/features/series-rename/validation.md`,
   commit `b4f0598`) — this Handoff entry was simply never updated after that Verified commit until
   now (found while closing out COVER-01); Phase 2 was in fact fully closed at that point.
-- **In progress — COVER-01** (`cover-read`, Phase 3 — Covers & Metadata Enrichment): `read_cover` —
-  T1-T3 implemented (`SqliteReader.cover_file` has_cover-keyed path resolution, `CalibreLibrary
-  .read_cover` dict facade, `read_cover` MCP tool returning viewable image content), all commits
-  green (ruff/mypy/pytest). **Status: Implementing, awaiting independent Verifier PASS** — T3 (this
-  entry) is the traceability closeout, not the Verified mark. First tool to return non-text (image)
-  content — see **AD-024** (incl. a SPEC_DEVIATION: `-> Any` return annotation instead of design's
-  `Image | dict`, forced by an mcp-SDK schema-generation crash on that union, same runtime wire
-  behavior verified). Test-seeding note: a real sample `.epub`'s embedded cover gets
-  auto-extracted by `calibredb add`, so cover/no-cover fixtures seed via `calibredb add --empty` +
-  a stdlib-only zlib-PNG helper instead, for deterministic has_cover state. Spec/design/tasks at
-  `.specs/features/cover-read/`.
-- **Next:** dispatch the independent Verifier for COVER-01 (spec-anchored check + discrimination
-  sensor) — Execute is not done until it PASSes. After that: COVER-02 (`cover-set`, the mutating
-  sibling — spec/design/tasks already drafted at `.specs/features/cover-set/`, not yet executed).
-  Full roadmap in `.specs/ROADMAP.md`.
+- **COVER-01** (`cover-read`, Phase 3 — Covers & Metadata Enrichment): `read_cover` — T1-T3
+  implemented (`SqliteReader.cover_file` has_cover-keyed path resolution, `CalibreLibrary
+  .read_cover` dict facade, `read_cover` MCP tool returning viewable image content). **Shipped &
+  Verified** (commit `94044f4`): independent Verifier PASS, 5/5 RCOVER requirements matched
+  spec-defined outcomes, 3/3 discrimination-sensor mutants killed, full build gate 318 passed.
+  First tool to return non-text (image) content — see **AD-024** (incl. a SPEC_DEVIATION: `-> Any`
+  return annotation instead of design's `Image | dict`, forced by an mcp-SDK schema-generation
+  crash on that union, same runtime wire behavior verified). Test-seeding note: a real sample
+  `.epub`'s embedded cover gets auto-extracted by `calibredb add`, so cover/no-cover fixtures seed
+  via `calibredb add --empty` + a stdlib-only zlib-PNG helper instead, for deterministic has_cover
+  state. `.specs/features/cover-read/validation.md`. (This entry was stale — recorded "Implementing"
+  in error until fixed while closing out COVER-02.)
+- **In progress — COVER-02** (`cover-set`, Phase 3, mutating sibling of COVER-01 — closes the
+  Phase-3 covers pair): `set_cover` — T1-T2 implemented (`CalibreLibrary.set_cover` plan→confirm
+  facade reusing `cover_file`/`set_metadata` unchanged, `set_cover` MCP tool), all commits green
+  (ruff/mypy/full 329-test suite). **Status: Implementing, awaiting independent Verifier PASS.**
+  Cover-typed twin of `update_metadata`: validates the image file (`is_file()` + extension
+  whitelist) BEFORE any backup/write, since `calibredb` silently no-ops on a bad path; apply
+  re-reads `cover_file` to demonstrate the result rather than asserting it. New **AD-025** (the
+  dedicated-tool decision + the silent-no-op lesson + a SPEC_DEVIATION: a genuine decode failure
+  was empirically found to raise loudly, `CalibredbError`, not silently no-op as design.md assumed
+  — see AD-025 for detail). Spec/design/tasks at `.specs/features/cover-set/`.
+- **Next:** dispatch the independent Verifier for COVER-02 (spec-anchored check + discrimination
+  sensor) — Execute is not done until it PASSes. That closes the Phase-3 covers pair (COVER-01 +
+  COVER-02); check `.specs/ROADMAP.md` for what's next in Phase 3.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
   `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
   `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
-  Implementing), `cover-read` (COVER-01, 5 req `RCOVER`, Implementing). Stack: uv + pytest + ruff;
-  test-safety rule enforced via the `scratch_library` fixture (writes never touch the real
-  library). Full build gate re-run as the T3 closeout regression: 318 passed, 0 failed; mypy + ruff
-  clean.
+  Verified), `cover-read` (COVER-01, 5 req `RCOVER`, Verified), `cover-set` (COVER-02, 7 req
+  `SCOVER`, Implementing). Stack: uv + pytest + ruff; test-safety rule enforced via the
+  `scratch_library` fixture (writes never touch the real library). Full build gate re-run as the
+  T2 closeout regression: 329 passed, 0 failed; mypy + ruff clean.
