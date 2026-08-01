@@ -10,10 +10,14 @@ and every request is bounded by a timeout + at most one retry (LOOKUP-10).
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .errors import EnrichmentSourceError
@@ -124,6 +128,31 @@ class OpenLibraryClient:
             description=description,
             cover_url=self._cover_id_url(entry),
         )
+
+    def download_cover(self, cover_url: str, dest_dir: Path | None = None) -> Path:
+        """Download the cover image to a surviving temp file (LOOKUP-06/09).
+
+        The bytes are fetched first, so a transport failure raises
+        ``EnrichmentSourceError`` before any file is created — never a partial or
+        zero-byte file left as a valid result. On success the bytes are written to
+        a uniquely-named file (prefix ``calibre-mcp-enrich-``) under ``dest_dir``
+        (or the system temp dir); the file is NOT auto-cleaned, so it survives the
+        call for COVER-02 to consume. The caller owns the returned path.
+        """
+        data = self._fetch(cover_url)  # raises before any file exists (LOOKUP-09)
+        suffix = Path(urllib.parse.urlparse(cover_url).path).suffix
+        directory = str(dest_dir) if dest_dir is not None else None
+        fd, temp_path = tempfile.mkstemp(
+            prefix="calibre-mcp-enrich-", suffix=suffix, dir=directory
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+        except OSError as exc:
+            os.unlink(temp_path)  # never leave a partial file behind
+            reason = f"could not write cover: {exc}"
+            raise EnrichmentSourceError(reason, cover_url) from exc
+        return Path(temp_path)
 
     def _fetch_work_description(self, isbn: str) -> str | None:
         """Follow edition->work for the description; any failure -> ``None``.

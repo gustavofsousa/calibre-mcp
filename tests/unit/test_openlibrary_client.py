@@ -212,3 +212,38 @@ def test_fetch_record_cover_falls_back_to_smaller_when_large_absent() -> None:
 
     assert record is not None
     assert record.cover_url == "https://covers.openlibrary.org/b/id/9-S.jpg"
+
+
+_IMAGE_BYTES = b"\x89PNG\r\n\x1a\n-fake-cover-bytes-"
+
+
+@pytest.mark.unit
+def test_download_cover_writes_surviving_file_with_exact_bytes(tmp_path) -> None:
+    # LOOKUP-06: the fetched bytes land on disk, the file survives the call, and
+    # the name carries the enrich prefix.
+    fake = _RoutingFake([("id/12345-L.jpg", _IMAGE_BYTES)])
+    path = OpenLibraryClient(http_get=fake).download_cover(_COVER_L, dest_dir=tmp_path)
+
+    assert path.exists()  # survives past the method return
+    assert path.read_bytes() == _IMAGE_BYTES
+    assert path.name.startswith("calibre-mcp-enrich-")
+
+
+@pytest.mark.unit
+def test_download_cover_failure_raises_and_leaves_no_file(tmp_path) -> None:
+    # LOOKUP-09: a fetch failure raises EnrichmentSourceError and leaves no
+    # partial/zero-byte file behind.
+    fake = _RoutingFake([("id/12345-L.jpg", EnrichmentSourceError("cover 500"))])
+    with pytest.raises(EnrichmentSourceError):
+        OpenLibraryClient(http_get=fake).download_cover(_COVER_L, dest_dir=tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.unit
+def test_download_cover_honors_custom_dest_dir(tmp_path) -> None:
+    # dest_dir is respected: the file is written under the given directory.
+    fake = _RoutingFake([("id/12345-L.jpg", _IMAGE_BYTES)])
+    path = OpenLibraryClient(http_get=fake).download_cover(_COVER_L, dest_dir=tmp_path)
+
+    assert path.parent == tmp_path
