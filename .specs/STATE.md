@@ -303,18 +303,28 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   bounded 10 s timeout + ≤1 retry, injectable `http_get` seam so tests never hit the real network),
   new `EnrichmentSourceError` in the taxonomy, `CalibreLibrary.enrich_from_identifier` facade
   (gap-only proposal reusing the `0101-01-01%` placeholder-pubdate rule + `cover_file` COVER-01),
-  and the `enrich_from_identifier` MCP tool. New **AD-026** (first outbound-network policy). T1–T7
-  implemented; 25 new tests (14 unit + 11 integration) + 3 e2e, full suite 357 passed, mypy + ruff
-  clean. **Independent Verifier pending** — traceability held at *Implementing* until PASS.
-- **Next:** run the independent Verifier for ENRICH-01, then close out its traceability → Verified.
-  After that, check `.specs/ROADMAP.md` for what's next in Phase 3 (Metadata Enrichment: ENRICH-02
-  apply, ENRICH-03 batch).
+  and the `enrich_from_identifier` MCP tool. New **AD-026** (first outbound-network policy).
+  **Shipped & Verified**: independent Verifier PASS (2 iterations — the first flagged two coverage
+  gaps, ISBN upper-case edge + LOOKUP-10 User-Agent, both closed by test-only commit `f32dc94`),
+  LOOKUP-01..10 all matched spec-defined outcomes (evidence-or-zero), 6/6 discrimination-sensor
+  mutants killed across client + facade layers, full suite 361 passed; mypy + ruff clean.
+  `.specs/features/identifier-lookup/validation.md`. Test-seeding notes: `calibredb add --empty`
+  yields the placeholder pubdate `0101-01-01%` (so an empty book reads as pubdate-missing) and
+  stores identifiers verbatim (hyphens/lower-case `x` preserved → the facade normalizes); the
+  real outbound `_urllib_get` is exercised via a monkeypatched `urlopen` (UA + timeout + error
+  wrapping), everything else through the injectable `http_get` seam (zero real network).
+  **Phase-3 Covers & Enrichment: covers pair (COVER-01/02) + ENRICH-01 now closed.**
+- **Next:** check `.specs/ROADMAP.md` for what's next in Phase 3 (Metadata Enrichment: ENRICH-02
+  routes ENRICH-01's `proposed` through `update_metadata`'s plan→confirm gate; ENRICH-03 batches it;
+  COVER-02 consumes the downloaded cover `local_path`).
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
   `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
   `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
   Verified), `cover-read` (COVER-01, 5 req `RCOVER`, Verified), `cover-set` (COVER-02, 7 req
-  `SCOVER`, Verified). Stack: uv + pytest + ruff; test-safety rule enforced via the
-  `scratch_library` fixture (writes never touch the real library). Full build gate re-run as the
-  COVER-02 Verifier closeout regression: 329 passed, 0 failed; mypy + ruff clean.
+  `SCOVER`, Verified), `identifier-lookup` (ENRICH-01, 10 req `LOOKUP`, Verified). Stack: uv +
+  pytest + ruff; test-safety rule enforced via the `scratch_library` fixture (writes never touch
+  the real library) + the injectable `http_get` seam (tests never touch the real Open Library).
+  Full build gate re-run as the ENRICH-01 Verifier closeout regression: 361 passed, 0 failed;
+  mypy + ruff clean.

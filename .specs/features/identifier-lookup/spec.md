@@ -211,16 +211,16 @@ seam).
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| LOOKUP-01 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-02 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-03 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-04 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-05 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-06 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-07 | P1: Look up an ISBN and propose missing metadata | Execute | Implementing |
-| LOOKUP-08 | P1: Fail the network gracefully | Execute | Implementing |
-| LOOKUP-09 | P1: Fail the network gracefully | Execute | Implementing |
-| LOOKUP-10 | P1: Fail the network gracefully | Execute | Implementing |
+| LOOKUP-01 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-02 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-03 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-04 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-05 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-06 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-07 | P1: Look up an ISBN and propose missing metadata | Execute | Verified |
+| LOOKUP-08 | P1: Fail the network gracefully | Execute | Verified |
+| LOOKUP-09 | P1: Fail the network gracefully | Execute | Verified |
+| LOOKUP-10 | P1: Fail the network gracefully | Execute | Verified |
 
 **ID format:** `LOOKUP-[NUMBER]`.
 
