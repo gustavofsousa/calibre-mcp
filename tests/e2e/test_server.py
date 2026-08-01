@@ -64,6 +64,8 @@ from calibre_mcp.config import (
     SMTP_RELAY_ENV,
     SMTP_USERNAME_ENV,
 )
+from calibre_mcp.errors import EnrichmentSourceError
+from calibre_mcp.openlibrary_client import OpenLibraryRecord
 
 REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
 
@@ -1255,3 +1257,87 @@ def test_library_stats_resource_stdout_stays_clean(seeded: int):
         _read_resource("calibre://library/stats")
 
     assert buffer.getvalue() == ""
+
+
+# ------------------------------------------------------------ ENRICH-01 (LOOKUP)
+
+
+class _EnrichFake:
+    """A no-network enricher for the tool surface: returns a record or raises."""
+
+    def __init__(
+        self,
+        record: OpenLibraryRecord | None,
+        *,
+        fetch_error: Exception | None = None,
+    ) -> None:
+        self._record = record
+        self._fetch_error = fetch_error
+
+    def fetch_record(self, isbn: str) -> OpenLibraryRecord | None:
+        if self._fetch_error is not None:
+            raise self._fetch_error
+        return self._record
+
+    def download_cover(self, cover_url: str, dest_dir: Path | None = None) -> Path:
+        raise AssertionError("cover download is not exercised by these e2e tests")
+
+
+def _seed_isbn_book(library_path: Path) -> int:
+    book_id = _seed_empty_book(library_path, "Enrich")
+    CalibredbRunner(library_path).set_metadata(
+        book_id, {"identifiers": "isbn:978-0-553-29335-7"}
+    )
+    return book_id
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_returns_found_true_payload(env: Path):
+    # LOOKUP-01: the tool returns the advisory found:true JSON payload, gap-only.
+    book_id = _seed_isbn_book(env)
+    server._get_library()._enricher = _EnrichFake(
+        OpenLibraryRecord("Bantam", "April 2009", "A space opera.", None)
+    )
+
+    result = _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert result["found"] is True
+    assert result["source"] == "openlibrary"
+    assert result["identifier_used"] == {"type": "isbn", "value": "9780553293357"}
+    assert result["proposed"] == {
+        "comments": "A space opera.",
+        "publisher": "Bantam",
+        "pubdate": "April 2009",
+    }
+    assert result["cover"] is None
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_found_false_is_normal_json_not_error(env: Path):
+    # LOOKUP-02: a book with no ISBN surfaces found:false as normal JSON, not an error.
+    book_id = _seed_empty_book(env, "NoIsbn")
+    server._get_library()._enricher = _EnrichFake(
+        OpenLibraryRecord("X", "Y", "Z", None)
+    )
+
+    result = _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no usable identifier (ISBN)",
+    }
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_source_error_maps_to_tool_error(env: Path):
+    # LOOKUP-08: an EnrichmentSourceError from the facade maps to a clean ToolError.
+    book_id = _seed_isbn_book(env)
+    server._get_library()._enricher = _EnrichFake(
+        None, fetch_error=EnrichmentSourceError("source offline")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert "source offline" in str(excinfo.value)

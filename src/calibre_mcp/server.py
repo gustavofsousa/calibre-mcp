@@ -554,6 +554,23 @@ def find_duplicates() -> dict:
 
 @mcp.tool()
 @_map_errors
+def enrich_from_identifier(book_id: int) -> dict:
+    """Propose gap-filling metadata for a book from its ISBN — READ-ONLY (ENRICH-01).
+
+    Makes one outbound call to Open Library keyed on the book's ISBN and returns
+    values ONLY for the fields the book currently lacks (comments/publisher/
+    pubdate), plus a downloaded cover ``local_path`` when the book has no cover.
+    Writes NOTHING to the library: it PROPOSES, it does not apply. To apply, feed
+    ``proposed`` into ``update_metadata`` and the cover ``local_path`` into
+    ``set_cover``. A book with no ISBN, or one Open Library has no record for,
+    returns ``{found: false, reason}`` (a normal result, not an error); when the
+    source is offline/unreachable the tool fails with a clear error.
+    """
+    return _jsonify(_get_library().enrich_from_identifier(book_id))
+
+
+@mcp.tool()
+@_map_errors
 def email_book(
     book_id: int,
     recipient: str,
