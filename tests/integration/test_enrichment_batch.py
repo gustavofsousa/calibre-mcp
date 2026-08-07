@@ -277,6 +277,35 @@ def test_default_cap_is_applied_to_selection(
 
 
 @pytest.mark.integration
+def test_default_cap_truncates_the_sweep_end_to_end(
+    facade: CalibreLibrary,
+    scratch_library: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ENRICH3-07 (spec P2 independent test): more candidates than the cap ->
+    # exactly the cap is processed while candidate_count reports the full total.
+    # Proven end-to-end with a small cap so the suite stays fast.
+    import calibre_mcp.library as lib
+    monkeypatch.setattr(lib, "ENRICH_BATCH_DEFAULT", 2)
+    runner = CalibredbRunner(scratch_library)
+    isbns = ["9780000000081", "9780000000082", "9780000000083"]
+    for n, isbn in enumerate(isbns):
+        book = _seed_empty_book(scratch_library, f"s{n}")
+        runner.set_metadata(book, {"identifiers": f"isbn:{isbn}"})
+    facade._enricher = _RoutingEnricher(
+        {isbn: OpenLibraryRecord("P", None, None, None) for isbn in isbns},
+        cover_dir=tmp_path,
+    )
+
+    result = facade.enrich_missing()
+
+    assert result["limit"] == 2
+    assert result["processed"] == 2
+    assert result["candidate_count"] == 3
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("kwargs"),
     [{"limit": 0}, {"limit": -1}, {"limit": 1000}, {"offset": -1}, {"limit": True}],
