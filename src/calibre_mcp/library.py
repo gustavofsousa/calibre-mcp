@@ -85,6 +85,13 @@ _ENRICH_FIELDS = (
 # with this counts as missing, not present (LOOKUP-05).
 _PLACEHOLDER_PUBDATE_PREFIX = "0101-01-01"
 
+# ENRICH-03: bound the batch's outbound-call volume (AD-027). ``DEFAULT`` is
+# processed when no ``limit`` is given; ``MAX`` is the hard ceiling a caller may
+# request — a larger ``limit`` is rejected as invalid input, never clamped into a
+# huge sweep. ``offset`` pages the rest across calls.
+ENRICH_BATCH_DEFAULT = 25
+ENRICH_BATCH_MAX = 100
+
 # COVER-02: extensions ``set_cover`` accepts as a local cover image, validated
 # before any backup/write (calibredb silently no-ops on a bad path, design Risks).
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -232,6 +239,89 @@ class CalibreLibrary:
             "skipped_present": skipped,
             "cover": self._propose_cover(book_id, record),
         }
+
+    def enrich_missing(
+        self, limit: int | None = None, offset: int = 0
+    ) -> dict[str, Any]:
+        """Batch review: propose enrichment for incomplete books (ENRICH-03).
+
+        Selects the books that carry an ISBN AND are missing an enrichable field,
+        looks each one up through the EXISTING ``enrich_from_identifier`` path, and
+        returns one advisory proposal per book plus an aggregate summary — writing
+        NOTHING (no ``calibredb`` call, no backup, no token; AD-016/AD-027). It
+        NEVER bulk-applies: the host walks ``results`` and applies each through the
+        ENRICH-02 chain (``update_metadata`` + ``set_cover``) per book.
+
+        Bounded (AD-027): at most ``limit`` candidates (default
+        ``ENRICH_BATCH_DEFAULT``, hard ceiling ``ENRICH_BATCH_MAX``); ``offset``
+        pages the rest. A bad bound
+        (``limit`` <=0 or >ceiling, negative ``offset``, non-int) is rejected as
+        ``InvalidInputError`` BEFORE any selection or network call. A single book's
+        ``EnrichmentSourceError`` becomes that item's ``status:"error"`` and the
+        sweep continues — one blip never discards the other proposals (ENRICH3-04).
+        """
+        effective_limit = self._validate_batch_bounds(limit, offset)
+        total, candidate_ids = self._reader.enrichable_candidates(
+            effective_limit, offset
+        )
+        summary = {"proposed": 0, "no_new_data": 0, "no_record": 0, "error": 0}
+        results: list[dict[str, Any]] = []
+        for book_id in candidate_ids:  # sequential, each with LOOKUP-10's own bound
+            try:
+                payload = self.enrich_from_identifier(book_id)
+            except EnrichmentSourceError as exc:  # ENRICH3-04: per-book isolation
+                results.append(
+                    {"book_id": book_id, "status": "error", "reason": str(exc)}
+                )
+                summary["error"] += 1
+                continue
+            status = self._classify_enrichment(payload)
+            results.append({**payload, "status": status})
+            summary[status] += 1
+        return {
+            "candidate_count": total,
+            "processed": len(results),
+            "limit": effective_limit,
+            "offset": offset,
+            "results": results,
+            "summary": summary,
+        }
+
+    @staticmethod
+    def _validate_batch_bounds(limit: int | None, offset: int) -> int:
+        """Reject a bad batch bound; return the effective limit (ENRICH3-08).
+
+        ``bool`` is excluded as a non-int (it is an ``int`` subclass); ``limit``
+        must be 1..``ENRICH_BATCH_MAX``; ``offset`` must be a non-negative int.
+        """
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise InvalidInputError(
+                f"offset must be a non-negative integer, got {offset!r}"
+            )
+        if limit is None:
+            return ENRICH_BATCH_DEFAULT
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise InvalidInputError(f"limit must be an integer, got {limit!r}")
+        if limit < 1 or limit > ENRICH_BATCH_MAX:
+            raise InvalidInputError(
+                f"limit must be between 1 and {ENRICH_BATCH_MAX}, got {limit}"
+            )
+        return limit
+
+    @staticmethod
+    def _classify_enrichment(payload: dict[str, Any]) -> str:
+        """Bucket a successful ``enrich_from_identifier`` result (ENRICH3-02/03).
+
+        ``no_record`` when the source returned nothing (``found`` false, folding
+        the rare non-normalizable-ISBN negative); ``proposed`` when there is
+        something to fill (a non-empty ``proposed`` or a downloadable ``cover``);
+        ``no_new_data`` when found but the record offered no missing value.
+        """
+        if not payload.get("found"):
+            return "no_record"
+        if payload.get("proposed") or payload.get("cover") is not None:
+            return "proposed"
+        return "no_new_data"
 
     @staticmethod
     def _normalize_isbn(raw: str | None) -> str | None:
