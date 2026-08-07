@@ -77,7 +77,8 @@ def _seed_empty_book(scratch_library: Path, title: str = "Book") -> int:
 
 
 def _set_isbn(scratch_library: Path, book_id: int) -> None:
-    CalibredbRunner(scratch_library).set_metadata(book_id, {"identifiers": f"isbn:{_RAW_ISBN}"})
+    runner = CalibredbRunner(scratch_library)
+    runner.set_metadata(book_id, {"identifiers": f"isbn:{_RAW_ISBN}"})
 
 
 class _FakeEnricher:
@@ -191,7 +192,9 @@ def test_reenrichment_after_apply_reuses_update_metadata_skip_behavior_unchanged
 
     first = facade.enrich_from_identifier(book_id)
     plan = facade.update_metadata(book_id, fields=first["proposed"])
-    facade.update_metadata(book_id, fields=first["proposed"], token=plan["confirmation_token"])
+    facade.update_metadata(
+        book_id, fields=first["proposed"], token=plan["confirmation_token"]
+    )
 
     second = facade.enrich_from_identifier(book_id)
     assert second["proposed"] == {}
@@ -223,7 +226,9 @@ def test_downloaded_cover_applies_through_set_cover_plan_then_confirm(
     assert plan["status"] == "plan"
     assert plan["current_has_cover"] is False
 
-    applied = facade.set_cover(book_id, image_path=local_path, token=plan["confirmation_token"])
+    applied = facade.set_cover(
+        book_id, image_path=local_path, token=plan["confirmation_token"]
+    )
     assert applied["status"] == "applied"
     assert applied["has_cover"] is True
     assert applied["cover_path"] is not None

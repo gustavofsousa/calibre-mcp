@@ -194,7 +194,14 @@ class CalibreLibrary:
         fields the book is missing (LOOKUP-04/05) plus a best-effort downloaded
         cover if the book lacks one (LOOKUP-06/09). Writes NOTHING to the library:
         no ``calibredb`` call, no backup, no confirmation token — the proposal is
-        advisory, applied later by ENRICH-02/COVER-02.
+        advisory, applied via the existing plan->confirm gates (ENRICH-02): pass
+        ``proposed`` verbatim as ``update_metadata``'s ``fields`` (their key sets
+        already match), and ``cover["local_path"]`` verbatim as ``set_cover``'s
+        ``image_path`` — two ordinary calls, no dedicated apply tool. Skip both
+        calls when there is nothing to apply: an empty ``proposed`` FAILS at
+        ``update_metadata``'s apply step (``calibredb`` rejects a zero-field
+        write) rather than no-op'ing, and a ``None`` ``cover["local_path"]``
+        FAILS ``set_cover`` with a bare ``TypeError`` rather than a clean error.
         """
         book = self._reader.get_book(book_id)  # LOOKUP-03, before any network
         isbn = self._normalize_isbn(book.identifiers.get("isbn"))
