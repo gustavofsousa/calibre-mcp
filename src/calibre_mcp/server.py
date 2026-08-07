@@ -571,6 +571,26 @@ def enrich_from_identifier(book_id: int) -> dict:
 
 @mcp.tool()
 @_map_errors
+def enrich_missing(limit: int | None = None, offset: int = 0) -> dict:
+    """Batch review: propose gap-filling metadata for incomplete books (ENRICH-03).
+
+    Selects the books that carry an ISBN AND are still missing an enrichable
+    field (comments/publisher/pubdate), looks each up via the same Open Library
+    path as ``enrich_from_identifier``, and returns ONE advisory proposal per
+    book plus a bucketed ``summary``. Writes NOTHING and NEVER bulk-applies: the
+    ``results`` are proposals to walk. HOST: for each ``status:"proposed"`` item,
+    apply it per book through the ENRICH-02 chain — feed ``proposed`` into
+    ``update_metadata`` and any ``cover.local_path`` into ``set_cover`` — after
+    the USER approves that book. Bounded: at most ``limit`` candidates (default
+    25, ceiling 100); ``offset`` pages the rest; ``candidate_count`` vs
+    ``processed`` tells you if more remain. A single book's source failure
+    becomes that item's ``status:"error"`` and never aborts the sweep.
+    """
+    return _jsonify(_get_library().enrich_missing(limit=limit, offset=offset))
+
+
+@mcp.tool()
+@_map_errors
 def email_book(
     book_id: int,
     recipient: str,

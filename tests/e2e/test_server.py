@@ -1341,3 +1341,46 @@ def test_enrich_from_identifier_source_error_maps_to_tool_error(env: Path):
         _call("enrich_from_identifier", {"book_id": book_id})
 
     assert "source offline" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_enrich_missing_returns_batch_proposals_as_json(env: Path):
+    # ENRICH3-01/02: the batch tool returns a proposal per candidate + a summary.
+    first = _seed_isbn_book(env)
+    second = _seed_empty_book(env, "Second")
+    CalibredbRunner(env).set_metadata(second, {"identifiers": "isbn:9780000000002"})
+    server._get_library()._enricher = _EnrichFake(
+        OpenLibraryRecord("Bantam", "2009", "A space opera.", None)
+    )
+
+    result = _call("enrich_missing", {})
+
+    assert result["candidate_count"] == 2
+    assert result["processed"] == 2
+    assert result["summary"] == {
+        "proposed": 2, "no_new_data": 0, "no_record": 0, "error": 0
+    }
+    assert {r["book_id"] for r in result["results"]} == {first, second}
+    assert all(r["status"] == "proposed" for r in result["results"])
+
+
+@pytest.mark.e2e
+def test_enrich_missing_isolates_source_error_as_json_status_not_tool_error(env: Path):
+    # ENRICH3-04: a per-book source failure is a JSON status:error, NOT a ToolError.
+    book_id = _seed_isbn_book(env)
+    server._get_library()._enricher = _EnrichFake(
+        None, fetch_error=EnrichmentSourceError("source offline")
+    )
+
+    result = _call("enrich_missing", {})  # does NOT raise
+
+    assert result["summary"]["error"] == 1
+    assert result["results"][0]["book_id"] == book_id
+    assert result["results"][0]["status"] == "error"
+
+
+@pytest.mark.e2e
+def test_enrich_missing_bad_bound_maps_to_tool_error(env: Path):
+    # ENRICH3-08: an invalid bound surfaces as a clean ToolError.
+    with pytest.raises(ToolError):
+        _call("enrich_missing", {"limit": 0})
