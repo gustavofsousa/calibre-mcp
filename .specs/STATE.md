@@ -187,6 +187,29 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   the GETs with no new dependency (keeps the single-dep `uvx` install, AD-023). **Numbering:** AD-025
   was taken by COVER-02, so this is AD-026.
 
+- **AD-027 — Batch outbound policy: a bounded, read-only sweep, never a bulk apply.**
+  Established by ENRICH-03 (`enrichment-batch`), the batch twin of ENRICH-01. **Context:** ENRICH-01
+  (AD-026) explicitly *deferred* the rate-limit question ("revisit only if ENRICH-03 batches hit the
+  limit"); ENRICH-03 is that revisit — one call sweeps the shelf's enrichable-but-incomplete books
+  and returns N proposals. **Decision:** the outbound volume is bounded by a **default cap (25) + hard
+  ceiling (100) + `offset` paging**, not a token-bucket limiter (still single-user, low volume); a
+  bound outside `1..100` (or a non-int / negative offset) is rejected as `InvalidInputError`
+  **before any selection or network call** — never clamped into a huge sweep. The batch is
+  **read-only advisory** (AD-016) — no `calibredb`, no backup, no confirmation token — and **never
+  bulk-applies**: `results` are proposals the host walks and applies per book through the ENRICH-02
+  chain. It adds **no new outbound site** — the sole HTTP module (AD-026) is reached only *through*
+  `enrich_from_identifier`, one sequential lookup per candidate (each carrying LOOKUP-10's own
+  timeout/retry). Per-book failure is **isolated** (AD-020 best-effort bucketing): one candidate's
+  `EnrichmentSourceError` becomes that item's `status:"error"` and the sweep continues — a single
+  offline blip never discards the other proposals. Candidate selection is a reader SQL query reusing
+  the *exact* `_stats_completeness` "missing" rules (comments/publisher/placeholder-pubdate) + a
+  non-blank `isbn` guard — one business rule, no drift. **Consequences:** the result is a bucketed
+  `{proposed, no_new_data, no_record, error}` summary + `candidate_count` vs `processed` so the host
+  can tell more remain and page them; nothing in the payload suggests a write happened (no token, no
+  `applied` field). Tool: `enrich_missing` (sibling of `enrich_from_identifier`). One documented,
+  intentional SPEC note: the residual "isbn present but normalizes to empty" negative folds into
+  `no_record` (rare, guarded by the SQL `trim(val) != ''`).
+
 ## Backlog — deferred (post-P2)
 
 - (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03/04 all shipped & Verified;
@@ -332,10 +355,27 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `_gap_proposal`/`update_metadata`/`set_cover`, full suite 366 passed (361 + 5 new, no count
   regression); mypy + ruff clean. `.specs/features/enrichment-apply/validation.md`. Commits
   `b57ba83` (tests + spec/design) / `ed5db75` (docstring).
-- **Next:** check `.specs/ROADMAP.md` for what's next in Phase 3 — ENRICH-03 (batch review mode:
-  "enrich all books missing comments" returns N independent plans, never a silent bulk apply) is
-  the last named Phase-3 candidate; otherwise re-check the Phase-3 phase-gate (meaningful drop in
-  `metadata_completeness` gaps + every book has a viewable cover) to see if the phase can close.
+- **ENRICH-03** (`enrichment-batch`, Phase 3 — batch review mode, the batch twin of ENRICH-01):
+  new tool `enrich_missing(limit=None, offset=0)`. A bounded, **read-only** sweep (new **AD-027**):
+  selects the books that carry an ISBN AND are missing an enrichable field (new reader query
+  `enrichable_candidates`, reusing the exact `_stats_completeness` "missing" rules), looks each up
+  through the **existing** `enrich_from_identifier` path (zero new network/proposal logic), and
+  returns one advisory proposal per book + a bucketed `{proposed, no_new_data, no_record, error}`
+  summary — writing NOTHING, NEVER bulk-applying (host walks `results`, applies each per book via the
+  ENRICH-02 chain). Bounded: default cap 25 / ceiling 100 / `offset` paging; a bad bound is rejected
+  (`InvalidInputError`) before any selection or network call. Per-book `EnrichmentSourceError` is
+  isolated to that item (`status:"error"`) and the sweep continues. **Shipped & Verified**:
+  independent Verifier PASS, 9/9 ENRICH3 requirements matched spec-defined outcomes (evidence-or-zero),
+  4/4 discrimination-sensor mutants killed (isbn guard / error-isolation / cap constant / classifier).
+  Full suite **387 passed** (366 + 21 new: 5 reader + 13 batch + 3 e2e); mypy + ruff clean. (The
+  Verifier's gate observed 386 at T3, before the ENRICH3-07 end-to-end cap test `6ef64c7` was added.)
+  `.specs/features/enrichment-batch/validation.md`. Commits `0cec3d6` (reader) / `1e56ddd`
+  (facade) / `6b77862` (tool) / `6ef64c7` (end-to-end cap test closing the Verifier's ENRICH3-07
+  caveat). **Phase-3 ENRICH cluster (01/02/03) now closed.**
+- **Next:** Phase 3's last named candidate (ENRICH-03) is done. Re-check the **Phase-3 phase-gate**
+  (meaningful drop in `metadata_completeness` gaps after a curation session + every book has a
+  viewable cover) against a real run to decide whether Phase 3 can formally close, or whether an
+  un-named gap (e.g. a Google Books / second enrichment source, or a cover-batch) is worth opening.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
@@ -343,7 +383,8 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
   Verified), `cover-read` (COVER-01, 5 req `RCOVER`, Verified), `cover-set` (COVER-02, 7 req
   `SCOVER`, Verified), `identifier-lookup` (ENRICH-01, 10 req `LOOKUP`, Verified),
-  `enrichment-apply` (ENRICH-02, 7 req `ENRICH2`, Verified). Stack: uv + pytest + ruff;
+  `enrichment-apply` (ENRICH-02, 7 req `ENRICH2`, Verified),
+  `enrichment-batch` (ENRICH-03, 9 req `ENRICH3`, Verified). Stack: uv + pytest + ruff;
   test-safety rule enforced via the `scratch_library` fixture (writes never touch the real
   library) + the injectable `http_get` seam (tests never touch the real Open Library).
-  Full build gate as of ENRICH-02's closeout: 366 passed, 0 failed; mypy + ruff clean.
+  Full build gate as of ENRICH-03's closeout: 387 passed, 0 failed; mypy + ruff clean.
