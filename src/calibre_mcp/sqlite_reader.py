@@ -194,6 +194,42 @@ class SqliteReader:
             conn.close()
         return [r["book"] for r in rows]
 
+    def enrichable_candidates(
+        self, limit: int, offset: int
+    ) -> tuple[int, list[int]]:
+        """Return ``(total_count, page_ids)`` of the enrichment candidates (ENRICH3-01).
+
+        A candidate carries a non-blank ``isbn`` identifier (so an Open Library
+        lookup is possible at all) AND is missing at least one enrichable field:
+        ``comments`` (no non-blank row), ``publisher`` (no ``books_publishers_link``
+        row), or ``pubdate`` (NULL or the ``0101-01-01%`` placeholder). These are
+        the SAME "missing" rules ``_stats_completeness`` uses — one business rule,
+        no drift. ``total_count`` is every matching book (for the host to tell more
+        remain); ``page_ids`` is the ``id``-ordered ``LIMIT``/``OFFSET`` window.
+        """
+        where = (
+            "WHERE EXISTS (SELECT 1 FROM identifiers i "
+            "WHERE i.book = b.id AND i.type = 'isbn' AND trim(i.val) != '') "
+            "AND ("
+            "NOT EXISTS (SELECT 1 FROM comments c "
+            "WHERE c.book = b.id AND trim(c.text) != '') "
+            "OR NOT EXISTS "
+            "(SELECT 1 FROM books_publishers_link p WHERE p.book = b.id) "
+            "OR b.pubdate IS NULL OR b.pubdate LIKE '0101-01-01%')"
+        )
+        conn = self._connect()
+        try:
+            total = conn.execute(
+                f"SELECT COUNT(*) AS n FROM books b {where}"
+            ).fetchone()["n"]
+            rows = conn.execute(
+                f"SELECT b.id FROM books b {where} ORDER BY b.id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        finally:
+            conn.close()
+        return int(total), [r["id"] for r in rows]
+
     @staticmethod
     def _require_int(book_id: int) -> None:
         if not isinstance(book_id, int) or isinstance(book_id, bool):
