@@ -131,20 +131,22 @@ confirm, and assert `read_cover` reports `has_cover: true` afterward.
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| ENRICH2-01 | P1: Apply enriched text fields | Execute | Pending |
-| ENRICH2-02 | P1: Apply enriched text fields | Execute | Pending |
-| ENRICH2-03 | P1: Apply enriched text fields (empty-proposed rule) | Execute | Pending |
-| ENRICH2-04 | P1: Apply enriched text fields (collision reuse) | Execute | Pending |
-| ENRICH2-05 | P2: Apply enriched cover | Execute | Pending |
-| ENRICH2-06 | P2: Apply enriched cover | Execute | Pending |
-| ENRICH2-07 | P2: Apply enriched cover (null-path rule) | Execute | Pending |
+| ENRICH2-01 | P1: Apply enriched text fields | Execute | ✅ Verified |
+| ENRICH2-02 | P1: Apply enriched text fields | Execute | ✅ Verified |
+| ENRICH2-03 | P1: Apply enriched text fields (empty-proposed rule) | Execute | ✅ Verified |
+| ENRICH2-04 | P1: Apply enriched text fields (collision reuse) | Execute | ✅ Verified |
+| ENRICH2-05 | P2: Apply enriched cover | Execute | ✅ Verified |
+| ENRICH2-06 | P2: Apply enriched cover | Execute | ✅ Verified |
+| ENRICH2-07 | P2: Apply enriched cover (null-path rule) | Execute | ✅ Verified |
 
 **ID format:** `ENRICH2-NN`
 
 **Status values:** Pending → In Design → In Tasks → Implementing → Verified
 
 **Coverage:** 7 total, 7 mapped to Execute (no Design/Tasks phase — Medium scope, pure integration
-proof over existing, already-Verified primitives), 0 unmapped.
+proof over existing, already-Verified primitives), 0 unmapped. Independent Verifier PASS
+(2026-08-07): 7/7 spec-anchored, 3/3 discrimination mutants killed — see
+`.specs/features/enrichment-apply/validation.md`.
 
 ---
 

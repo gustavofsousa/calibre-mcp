@@ -314,17 +314,36 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   real outbound `_urllib_get` is exercised via a monkeypatched `urlopen` (UA + timeout + error
   wrapping), everything else through the injectable `http_get` seam (zero real network).
   **Phase-3 Covers & Enrichment: covers pair (COVER-01/02) + ENRICH-01 now closed.**
-- **Next:** check `.specs/ROADMAP.md` for what's next in Phase 3 (Metadata Enrichment: ENRICH-02
-  routes ENRICH-01's `proposed` through `update_metadata`'s plan→confirm gate; ENRICH-03 batches it;
-  COVER-02 consumes the downloaded cover `local_path`).
+- **ENRICH-02** (`enrichment-apply`, Phase 3 — routes ENRICH-01's proposal through the existing
+  gates): no new tool. User-decided scope (2026-08-07): `enrich_from_identifier`'s `proposed` dict
+  is already a strict subset of `update_metadata`'s `ALLOWED_EDIT_FIELDS`, so the host chains
+  `enrich_from_identifier` → `update_metadata` (fields) → `set_cover` (cover) — three already-Shipped
+  tools, zero new mutation path. Deliverable: new integration test module
+  (`tests/integration/test_enrichment_apply.py`, 5 tests / 7 ACs) proving the round-trip, plus a
+  docstring cross-reference on `enrich_from_identifier` documenting the two-step flow and two skip
+  rules. **Two spec assumptions were corrected against empirically observed `calibredb` behavior**
+  while writing the tests: an empty `fields` dict does NOT no-op at `update_metadata`'s apply step —
+  it raises `CalibredbError` (`calibredb` rejects a zero-field `set_metadata` call); and `calibredb`
+  normalizes a partial `pubdate` string (`"April 2009"`) into a full ISO datetime
+  (`"2009-04-15 00:00:00+00:00"`) rather than preserving it verbatim — both documented as
+  SPEC_DEVIATION in `.specs/features/enrichment-apply/design.md` and reflected in the final spec
+  text. **Shipped & Verified**: independent Verifier PASS, 7/7 ENRICH2 requirements matched
+  spec-defined outcomes (evidence-or-zero), 3/3 discrimination-sensor mutants killed across
+  `_gap_proposal`/`update_metadata`/`set_cover`, full suite 366 passed (361 + 5 new, no count
+  regression); mypy + ruff clean. `.specs/features/enrichment-apply/validation.md`. Commits
+  `b57ba83` (tests + spec/design) / `ed5db75` (docstring).
+- **Next:** check `.specs/ROADMAP.md` for what's next in Phase 3 — ENRICH-03 (batch review mode:
+  "enrich all books missing comments" returns N independent plans, never a silent bulk apply) is
+  the last named Phase-3 candidate; otherwise re-check the Phase-3 phase-gate (meaningful drop in
+  `metadata_completeness` gaps + every book has a viewable cover) to see if the phase can close.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
   `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
   `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
   Verified), `cover-read` (COVER-01, 5 req `RCOVER`, Verified), `cover-set` (COVER-02, 7 req
-  `SCOVER`, Verified), `identifier-lookup` (ENRICH-01, 10 req `LOOKUP`, Verified). Stack: uv +
-  pytest + ruff; test-safety rule enforced via the `scratch_library` fixture (writes never touch
-  the real library) + the injectable `http_get` seam (tests never touch the real Open Library).
-  Full build gate re-run as the ENRICH-01 Verifier closeout regression: 361 passed, 0 failed;
-  mypy + ruff clean.
+  `SCOVER`, Verified), `identifier-lookup` (ENRICH-01, 10 req `LOOKUP`, Verified),
+  `enrichment-apply` (ENRICH-02, 7 req `ENRICH2`, Verified). Stack: uv + pytest + ruff;
+  test-safety rule enforced via the `scratch_library` fixture (writes never touch the real
+  library) + the injectable `http_get` seam (tests never touch the real Open Library).
+  Full build gate as of ENRICH-02's closeout: 366 passed, 0 failed; mypy + ruff clean.
