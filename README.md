@@ -10,11 +10,23 @@ A local **MCP server** (stdio) that lets an LLM host — Claude Desktop, Claude 
 [Calibre](https://calibre-ebook.com/) ebook library conversationally: search, edit metadata, add,
 convert, deduplicate, remove, and email books, all with human-in-the-loop safety.
 
-> I built this to stop clicking around the Calibre GUI and manage my library from a chat instead.
-> It's a personal project, and also a deliberate showcase of how I build backend/tooling systems:
-> hybrid I/O design, an explicit failure taxonomy, human-approval gates on every destructive
-> action, and a test suite that never touches real user data. See
-> [ARCHITECTURE.md](ARCHITECTURE.md) for the full design writeup.
+**Most Calibre MCP servers are read-only — they search and list. This one *writes* — and does it
+safely.** Editing metadata, adding, converting, and deleting books is where a tool can actually
+corrupt or lose your library, so every mutation here goes through a design built to make that
+impossible to do by accident:
+
+- **Plan → confirm on every destructive action.** The first call returns a human-readable diff and
+  a `confirmation_token`; nothing changes until you re-call with that exact token.
+- **Automatic `metadata.db` backup before every write** (rolling, last 20).
+- **Recoverable deletes** — trash copy *and* Calibre recycle bin, never a hard delete.
+- **Reads can't corrupt anything** — the SQLite connection is opened `mode=ro`.
+
+> Built to stop clicking around the Calibre GUI and manage a library from a chat instead — and
+> deliberately engineered as a showcase of how to design a tool that's *allowed to delete a user's
+> files*: hybrid I/O design, an explicit failure taxonomy, human-approval gates on every
+> destructive action, and a test suite that never touches real user data. See
+> [PRODUCT.md](PRODUCT.md) for what it does and why, and [ARCHITECTURE.md](ARCHITECTURE.md) for the
+> full design writeup.
 
 ## Why the hybrid design
 
@@ -42,8 +54,17 @@ Full rationale, module boundaries, and the decision log behind these choices liv
 
 ## Install
 
+**Zero-clone (recommended)** — [`uv`](https://docs.astral.sh/uv/) builds and runs it straight from
+the repo, no manual checkout:
+
 ```bash
-git clone <this-repo> calibre-mcp
+uvx --from git+https://github.com/gustavofsousa/calibre-mcp calibre-mcp
+```
+
+**From a local checkout** (for development, or to pin a specific state):
+
+```bash
+git clone https://github.com/gustavofsousa/calibre-mcp calibre-mcp
 cd calibre-mcp
 uv sync
 ```
@@ -74,7 +95,24 @@ without them, and only `email_book` fails if they're missing):
 
 ### Claude Desktop / Claude Code
 
-Add to your MCP config (e.g. `claude_desktop_config.json`):
+Add to your MCP config (e.g. `claude_desktop_config.json`). **Zero-clone** — runs straight from the
+repo via `uvx`:
+
+```json
+{
+  "mcpServers": {
+    "calibre": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/gustavofsousa/calibre-mcp", "calibre-mcp"],
+      "env": {
+        "CALIBRE_LIBRARY_PATH": "/absolute/path/to/your/Calibre Library"
+      }
+    }
+  }
+}
+```
+
+Or, from a local checkout:
 
 ```json
 {
@@ -110,10 +148,16 @@ all logs go to stderr, on purpose (see [ARCHITECTURE.md](ARCHITECTURE.md#stdout-
 | `get_book` | Full metadata for one book id. | read-only |
 | `find_duplicates` | Advisory report of likely-duplicate books by normalized (title, author). Never merges. | read-only |
 | `update_metadata` | Edit a whitelisted field set (title, authors, tags, series, rating, comments, …). | plan → confirm |
+| `update_metadata_bulk` | Broadcast a field change to N books in one batch (`list_mode` add/remove/replace). | plan → confirm (batch) |
 | `add_book` | Add a book from a local file path; surfaces duplicates honestly. | single-step (backed up) |
+| `import_folder` | Recursively import every ebook file found under a directory. | additive (backed up) |
 | `convert_book` | Convert to a new format (`epub`, `azw3`, `mobi`, `pdf`) — additive, keeps the original(s). | single-step (backed up) |
+| `convert_book_bulk` | Convert N books to one target format in one call. | additive (backed up) |
 | `remove_book` | **Recoverable** removal: trash copy + Calibre recycle bin, never a hard delete. | plan → confirm |
 | `email_book` | Email a book's file via `calibre-smtp`, picking the best format automatically. | plan → confirm |
+
+Plus one MCP **resource**, `calibre://library/stats` — an aggregate library profile (totals,
+format/language mix, metadata completeness, data-quality flags) readable without any tool call.
 
 Every tool's full contract (edge cases, error conditions, exact field whitelist) is documented in
 its docstring in [`server.py`](src/calibre_mcp/server.py) — those docstrings are what the LLM host

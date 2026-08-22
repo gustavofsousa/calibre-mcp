@@ -11,8 +11,23 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .errors import BookNotFoundError, InvalidInputError
+
+
+@dataclass
+class LibraryStats:
+    """Aggregate baseline profile of the library (STATS-01), one snapshot."""
+
+    totals: dict[str, Any]
+    formats: dict[str, Any]
+    languages: dict[str, Any]
+    metadata_completeness: dict[str, Any]
+    identifier_types: dict[str, Any]
+    authors: dict[str, Any]
+    tags: dict[str, Any]
+    data_quality: dict[str, Any]
 
 
 @dataclass
@@ -95,7 +110,7 @@ class SqliteReader:
             row = conn.execute("SELECT COUNT(*) AS n FROM books").fetchone()
         finally:
             conn.close()
-        return row["n"]
+        return int(row["n"])
 
     def list_books(self, limit: int, offset: int, sort: str) -> list[Book]:
         """Return a page of books ordered by ``sort`` (SEARCH-02).
@@ -118,6 +133,66 @@ class SqliteReader:
         finally:
             conn.close()
         return [book for book in books if book is not None]
+
+    def books_by_author(self, name: str) -> list[int]:
+        """Return the ascending-sorted ids of every book credited to ``name``
+        by exact match (ARENAME-01/02 discovery step).
+
+        Matches the same ``books_authors_link``/``authors`` join as
+        ``_authors``; a co-authored book is returned when ``name`` matches any
+        of its credited authors. No match returns ``[]``.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT l.book FROM books_authors_link l "
+                "JOIN authors a ON a.id = l.author "
+                "WHERE a.name = ? ORDER BY l.book",
+                (name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["book"] for r in rows]
+
+    def books_by_tag(self, name: str) -> list[int]:
+        """Return the ascending-sorted ids of every book carrying ``name`` by
+        exact match (TRENAME-01/02 discovery step).
+
+        Matches the same ``books_tags_link``/``tags`` join as ``_tags``. No
+        match returns ``[]`` (not an error) — the facade rejects that as "tag
+        not found" before any backup.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT l.book FROM books_tags_link l "
+                "JOIN tags t ON t.id = l.tag "
+                "WHERE t.name = ? ORDER BY l.book",
+                (name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["book"] for r in rows]
+
+    def books_by_series(self, name: str) -> list[int]:
+        """Return the ascending-sorted ids of every book whose series is
+        ``name`` by exact match (SRENAME-01/02 discovery step).
+
+        Matches the same ``books_series_link``/``series`` join as ``_series``.
+        No match returns ``[]`` (not an error) — the facade rejects that as
+        "series not found" before any backup.
+        """
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT l.book FROM books_series_link l "
+                "JOIN series s ON s.id = l.series "
+                "WHERE s.name = ? ORDER BY l.book",
+                (name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["book"] for r in rows]
 
     @staticmethod
     def _require_int(book_id: int) -> None:
@@ -264,6 +339,177 @@ class SqliteReader:
                 )
             files[row["format"]] = file_path
         return files
+
+    def library_stats(self) -> LibraryStats:
+        """Compute the aggregate baseline profile of the library (STATS-01).
+
+        One read-only connection for the whole snapshot, so it is internally
+        consistent (AC-5). Never raises for an empty library: every count is
+        zero and every list is empty (AC-2).
+        """
+        conn = self._connect()
+        try:
+            books = conn.execute("SELECT COUNT(*) AS n FROM books").fetchone()["n"]
+            totals = self._stats_totals(conn, books)
+            formats = self._stats_formats(conn)
+            languages = self._stats_languages(conn, books)
+            completeness = self._stats_completeness(conn, books)
+            identifier_types = self._stats_identifier_types(conn)
+            authors = self._stats_authors(conn)
+            tags = self._stats_tags(conn)
+            data_quality = self._stats_data_quality(conn)
+        finally:
+            conn.close()
+
+        return LibraryStats(
+            totals=totals,
+            formats=formats,
+            languages=languages,
+            metadata_completeness=completeness,
+            identifier_types=identifier_types,
+            authors=authors,
+            tags=tags,
+            data_quality=data_quality,
+        )
+
+    @staticmethod
+    def _stats_totals(conn: sqlite3.Connection, books: int) -> dict[str, Any]:
+        row = conn.execute("SELECT MIN(id) AS lo, MAX(id) AS hi FROM books").fetchone()
+        min_id, max_id = row["lo"], row["hi"]
+        if books == 0:
+            return {
+                "books": 0,
+                "min_id": None,
+                "max_id": None,
+                "gapped_ids": 0,
+                "next_id_hint": 1,
+            }
+        return {
+            "books": books,
+            "min_id": min_id,
+            "max_id": max_id,
+            "gapped_ids": (max_id - min_id + 1) - books,
+            "next_id_hint": max_id + 1,
+        }
+
+    @staticmethod
+    def _stats_formats(conn: sqlite3.Connection) -> dict[str, Any]:
+        rows = conn.execute(
+            "SELECT format, COUNT(*) AS n FROM data GROUP BY format "
+            "ORDER BY n DESC, format ASC"
+        ).fetchall()
+        return {r["format"]: r["n"] for r in rows}
+
+    @staticmethod
+    def _stats_languages(conn: sqlite3.Connection, books: int) -> dict[str, Any]:
+        rows = conn.execute(
+            "SELECT lg.lang_code AS lang_code, COUNT(*) AS n "
+            "FROM books_languages_link l JOIN languages lg ON lg.id = l.lang_code "
+            "GROUP BY lg.lang_code ORDER BY n DESC, lang_code ASC"
+        ).fetchall()
+        languages = {r["lang_code"]: r["n"] for r in rows}
+        with_language = conn.execute(
+            "SELECT COUNT(DISTINCT book) AS n FROM books_languages_link"
+        ).fetchone()["n"]
+        languages["unset"] = books - with_language
+        return languages
+
+    @staticmethod
+    def _stats_completeness(conn: sqlite3.Connection, books: int) -> dict[str, Any]:
+        def pct(filled: int) -> float:
+            return round(100 * filled / books, 1) if books else 0.0
+
+        filled_counts = {
+            "comments": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM comments WHERE trim(text) != ''"
+            ).fetchone()["n"],
+            "publisher": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM books_publishers_link"
+            ).fetchone()["n"],
+            "tags": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM books_tags_link"
+            ).fetchone()["n"],
+            "identifiers": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM identifiers"
+            ).fetchone()["n"],
+            "languages": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM books_languages_link"
+            ).fetchone()["n"],
+            "real_pubdate": conn.execute(
+                "SELECT COUNT(*) AS n FROM books "
+                "WHERE pubdate IS NOT NULL AND pubdate NOT LIKE '0101-01-01%'"
+            ).fetchone()["n"],
+            "series": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM books_series_link"
+            ).fetchone()["n"],
+            "rating": conn.execute(
+                "SELECT COUNT(DISTINCT book) AS n FROM books_ratings_link"
+            ).fetchone()["n"],
+        }
+        return {
+            field: {"filled": filled, "pct": pct(filled)}
+            for field, filled in filled_counts.items()
+        }
+
+    @staticmethod
+    def _stats_identifier_types(conn: sqlite3.Connection) -> dict[str, Any]:
+        rows = conn.execute(
+            "SELECT type, COUNT(*) AS n FROM identifiers GROUP BY type "
+            "ORDER BY n DESC, type ASC"
+        ).fetchall()
+        return {r["type"]: r["n"] for r in rows}
+
+    @staticmethod
+    def _stats_authors(conn: sqlite3.Connection) -> dict[str, Any]:
+        distinct = conn.execute(
+            "SELECT COUNT(DISTINCT author) AS n FROM books_authors_link"
+        ).fetchone()["n"]
+        rows = conn.execute(
+            "SELECT a.name AS name, COUNT(*) AS n FROM books_authors_link l "
+            "JOIN authors a ON a.id = l.author "
+            "GROUP BY a.id ORDER BY n DESC, name ASC LIMIT 10"
+        ).fetchall()
+        return {
+            "distinct": distinct,
+            "top": [{"name": r["name"], "count": r["n"]} for r in rows],
+        }
+
+    @staticmethod
+    def _stats_tags(conn: sqlite3.Connection) -> dict[str, Any]:
+        distinct = conn.execute(
+            "SELECT COUNT(DISTINCT tag) AS n FROM books_tags_link"
+        ).fetchone()["n"]
+        rows = conn.execute(
+            "SELECT t.name AS name, COUNT(*) AS n FROM books_tags_link l "
+            "JOIN tags t ON t.id = l.tag "
+            "GROUP BY t.id ORDER BY n DESC, name ASC LIMIT 10"
+        ).fetchall()
+        return {
+            "distinct": distinct,
+            "top": [{"name": r["name"], "count": r["n"]} for r in rows],
+        }
+
+    @staticmethod
+    def _stats_data_quality(conn: sqlite3.Connection) -> dict[str, Any]:
+        unknown_author_books = conn.execute(
+            "SELECT COUNT(DISTINCT l.book) AS n FROM books_authors_link l "
+            "JOIN authors a ON a.id = l.author WHERE a.name = 'Unknown'"
+        ).fetchone()["n"]
+        placeholder_pubdate = conn.execute(
+            "SELECT COUNT(*) AS n FROM books WHERE pubdate LIKE '0101-01-01%'"
+        ).fetchone()["n"]
+        series_used = conn.execute(
+            "SELECT COUNT(*) AS n FROM books_series_link"
+        ).fetchone()["n"]
+        rating_used = conn.execute(
+            "SELECT COUNT(*) AS n FROM books_ratings_link"
+        ).fetchone()["n"]
+        return {
+            "unknown_author_books": unknown_author_books,
+            "placeholder_pubdate_0101": placeholder_pubdate,
+            "series_unused": series_used == 0,
+            "rating_unused": rating_used == 0,
+        }
 
     def find_duplicate_groups(self) -> list[list[Book]]:
         """Group likely-duplicate books by normalized (title, primary author)

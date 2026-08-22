@@ -30,6 +30,7 @@ Coverage:
   CONV-01    convert_book adds a format additively; unsupported target is an error.
   ORG-01     find_duplicates returns groups; no duplicates -> empty group set.
   EMAIL-01   email_book plan->confirm two-step, sent via a stubbed calibre-smtp.
+  MERGE-01   merge_duplicate_group plan->confirm, format union + recoverable delete.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from calibre_mcp import server
 from calibre_mcp.calibre_smtp_runner import CalibreSmtpRunner
@@ -73,6 +74,12 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     """Invoke a registered tool in-process and parse its JSON result payload."""
     result = asyncio.run(server.mcp.call_tool(name, arguments))
     return json.loads(result[0].text)
+
+
+def _read_resource(uri: str) -> Any:
+    """Read a registered resource in-process and parse its JSON content."""
+    result = asyncio.run(server.mcp.read_resource(uri))
+    return json.loads(result[0].content)
 
 
 @pytest.fixture
@@ -219,6 +226,321 @@ def test_update_metadata_invalid_field_is_tool_error(seeded: int):
     assert "allowed" in str(excinfo.value)
 
 
+# ---------------------------------------------------------------- BULK EDIT
+
+
+@pytest.fixture
+def two_seeded(env: Path, tmp_path: Path) -> list[int]:
+    """Seed two DISTINCT books (different source files) and return their ids."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "one.epub")
+    shutil.copy2(sources[1], tmp_path / "two.epub")
+    id1 = runner.add(tmp_path / "one.epub").book_id
+    id2 = runner.add(tmp_path / "two.epub").book_id
+    assert id1 is not None and id2 is not None
+    return [id1, id2]
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_plan_then_apply_round_trip(two_seeded: list[int]):
+    # BEDIT-01/02: plan (no token) -> per-book diff + token, no write; apply
+    # (token) -> writes both books, re-read reflects the change.
+    plan = _call(
+        "update_metadata_bulk",
+        {"book_ids": two_seeded, "fields": {"series": "Dune"}},
+    )
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == set(two_seeded)
+    assert all(d["diff"]["series"]["proposed"] == "Dune" for d in plan["diffs"])
+    assert _call("get_book", {"book_id": two_seeded[0]})["series"] is None
+
+    applied = _call(
+        "update_metadata_bulk",
+        {
+            "book_ids": two_seeded,
+            "fields": {"series": "Dune"},
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "applied"
+    assert applied["failed"] == []
+    assert {a["book_id"] for a in applied["applied"]} == set(two_seeded)
+    for book_id in two_seeded:
+        assert _call("get_book", {"book_id": book_id})["series"] == "Dune"
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_partial_failure_reports_applied_and_failed(
+    two_seeded: list[int],
+):
+    # BEDIT-04: one vanished id fails alone; the other book still applies, and
+    # the result reports both applied and failed truthfully.
+    ok_id = two_seeded[0]
+    book_ids = [ok_id, 999999]
+    plan = _call(
+        "update_metadata_bulk",
+        {"book_ids": book_ids, "fields": {"series": "Dune"}},
+    )
+
+    applied = _call(
+        "update_metadata_bulk",
+        {
+            "book_ids": book_ids,
+            "fields": {"series": "Dune"},
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert {a["book_id"] for a in applied["applied"]} == {ok_id}
+    assert {f["book_id"] for f in applied["failed"]} == {999999}
+    assert _call("get_book", {"book_id": ok_id})["series"] == "Dune"
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_empty_book_ids_is_tool_error(env: Path):
+    # BEDIT-06: empty book_ids is rejected before any token/backup/write.
+    with pytest.raises(ToolError) as excinfo:
+        _call("update_metadata_bulk", {"book_ids": [], "fields": {"series": "Dune"}})
+
+    assert "book_ids" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_unknown_field_is_tool_error(two_seeded: list[int]):
+    # BEDIT-06: an unknown field is rejected as invalid input.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "update_metadata_bulk",
+            {"book_ids": two_seeded, "fields": {"bogus_field": "x"}},
+        )
+
+    assert "bogus_field" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_update_metadata_bulk_description_documents_list_mode_and_contract():
+    # T3 Done-when: docstring documents list_mode + the applied/failed contract.
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["update_metadata_bulk"].description.lower()
+
+    assert "host" in text and "surface" in text
+    assert "list_mode" in text
+    assert "add" in text and "remove" in text and "replace" in text
+    assert "applied" in text and "failed" in text
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_bulk_edit_calls(two_seeded: list[int]):
+    # Design Risks: stdout is the MCP framing channel; bulk edit must stay clean.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        plan = _call(
+            "update_metadata_bulk",
+            {"book_ids": two_seeded, "fields": {"series": "Dune"}},
+        )
+        _call(
+            "update_metadata_bulk",
+            {
+                "book_ids": two_seeded,
+                "fields": {"series": "Dune"},
+                "confirmation_token": plan["confirmation_token"],
+            },
+        )
+
+    assert buffer.getvalue() == ""
+
+
+# ---------------------------------------------------------------- RENAME AUTHOR
+
+
+@pytest.fixture
+def author_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed two books: one credited to 'Old Name', one to 'Someone Else'."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "old.epub")
+    shutil.copy2(sources[1], tmp_path / "other.epub")
+    old_id = runner.add(tmp_path / "old.epub").book_id
+    other_id = runner.add(tmp_path / "other.epub").book_id
+    assert old_id is not None and other_id is not None
+    runner.set_metadata(old_id, {"authors": ["Old Name"]})
+    runner.set_metadata(other_id, {"authors": ["Someone Else"]})
+    return old_id, other_id
+
+
+@pytest.mark.e2e
+def test_rename_author_plan_then_apply_round_trip(author_seeded: tuple[int, int]):
+    # ARENAME-01/04/08: plan (no token) -> per-book resolved diff + token, no
+    # write; apply (token) -> writes the affected book, re-read reflects the
+    # rename, and the unaffected book is untouched.
+    old_id, other_id = author_seeded
+
+    plan = _call("rename_author", {"old_name": "Old Name", "new_name": "New Name"})
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == {old_id}
+    assert plan["diffs"][0]["diff"]["authors"]["proposed"] == ["New Name"]
+    assert _call("get_book", {"book_id": old_id})["authors"] == ["Old Name"]
+
+    applied = _call(
+        "rename_author",
+        {
+            "old_name": "Old Name",
+            "new_name": "New Name",
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "renamed"
+    assert applied["applied"] == [{"book_id": old_id, "authors": ["New Name"]}]
+    assert applied["failed"] == []
+    assert _call("get_book", {"book_id": old_id})["authors"] == ["New Name"]
+    assert _call("get_book", {"book_id": other_id})["authors"] == ["Someone Else"]
+
+
+@pytest.mark.e2e
+def test_rename_author_not_found_is_tool_error(env: Path):
+    # ARENAME-02: an author matching no book surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "rename_author", {"old_name": "Nobody At All", "new_name": "New Name"}
+        )
+
+    assert "not found" in str(excinfo.value).lower()
+
+
+# ------------------------------------------------------------------- RENAME TAG
+
+
+@pytest.fixture
+def tag_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed two books: one tagged 'old-tag', one tagged 'other-tag'."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "old.epub")
+    shutil.copy2(sources[1], tmp_path / "other.epub")
+    old_id = runner.add(tmp_path / "old.epub").book_id
+    other_id = runner.add(tmp_path / "other.epub").book_id
+    assert old_id is not None and other_id is not None
+    runner.set_metadata(old_id, {"tags": ["old-tag"]})
+    runner.set_metadata(other_id, {"tags": ["other-tag"]})
+    return old_id, other_id
+
+
+@pytest.mark.e2e
+def test_rename_tag_plan_then_apply_round_trip(tag_seeded: tuple[int, int]):
+    # TRENAME-01/04/08: plan (no token) -> per-book resolved diff + token, no
+    # write; apply (token) -> writes the affected book, re-read reflects the
+    # rename, and the unaffected book is untouched.
+    old_id, other_id = tag_seeded
+
+    plan = _call("rename_tag", {"old_tag": "old-tag", "new_tag": "new-tag"})
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == {old_id}
+    assert set(plan["diffs"][0]["diff"]["tags"]["proposed"]) == {"new-tag"}
+    assert _call("get_book", {"book_id": old_id})["tags"] == ["old-tag"]
+
+    applied = _call(
+        "rename_tag",
+        {
+            "old_tag": "old-tag",
+            "new_tag": "new-tag",
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "renamed"
+    assert applied["applied"] == [{"book_id": old_id, "tags": ["new-tag"]}]
+    assert applied["failed"] == []
+    assert _call("get_book", {"book_id": old_id})["tags"] == ["new-tag"]
+    assert _call("get_book", {"book_id": other_id})["tags"] == ["other-tag"]
+
+
+@pytest.mark.e2e
+def test_rename_tag_not_found_is_tool_error(env: Path):
+    # TRENAME-02: a tag on no book surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call("rename_tag", {"old_tag": "no-such-tag", "new_tag": "new-tag"})
+
+    assert "not found" in str(excinfo.value).lower()
+
+
+@pytest.fixture
+def series_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed two books: one in series 'Old' (index 7.5), one in 'Other'."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "old.epub")
+    shutil.copy2(sources[1], tmp_path / "other.epub")
+    old_id = runner.add(tmp_path / "old.epub").book_id
+    other_id = runner.add(tmp_path / "other.epub").book_id
+    assert old_id is not None and other_id is not None
+    runner.set_metadata(old_id, {"series": "Old", "series_index": 7.5})
+    runner.set_metadata(other_id, {"series": "Other", "series_index": 1.0})
+    return old_id, other_id
+
+
+@pytest.mark.e2e
+def test_rename_series_plan_then_apply_round_trip_preserves_index(
+    series_seeded: tuple[int, int],
+):
+    # SRENAME-01/04/07/08: plan (no token) -> per-book diff + token, no
+    # write; apply (token) -> writes the affected book, re-read reflects the
+    # rename WITH the original series_index preserved, unaffected book
+    # untouched.
+    old_id, other_id = series_seeded
+
+    plan = _call("rename_series", {"old_series": "Old", "new_series": "New"})
+
+    assert plan["status"] == "plan"
+    assert {d["book_id"] for d in plan["diffs"]} == {old_id}
+    assert plan["diffs"][0]["diff"]["series"]["proposed"] == "New"
+    assert plan["diffs"][0]["series_index"] == 7.5
+    assert _call("get_book", {"book_id": old_id})["series"] == "Old"
+
+    applied = _call(
+        "rename_series",
+        {
+            "old_series": "Old",
+            "new_series": "New",
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "renamed"
+    assert applied["applied"] == [
+        {"book_id": old_id, "series": "New", "series_index": 7.5}
+    ]
+    assert applied["failed"] == []
+    assert _call("get_book", {"book_id": old_id})["series"] == "New"
+    assert _call("get_book", {"book_id": old_id})["series_index"] == 7.5
+    assert _call("get_book", {"book_id": other_id})["series"] == "Other"
+
+
+@pytest.mark.e2e
+def test_rename_series_not_found_is_tool_error(env: Path):
+    # SRENAME-02: a series on no book surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "rename_series",
+            {"old_series": "no-such-series", "new_series": "New"},
+        )
+
+    assert "not found" in str(excinfo.value).lower()
+
+
 # ---------------------------------------------------------------------- ADD
 
 
@@ -241,6 +563,68 @@ def test_add_book_nonexistent_path_is_tool_error(env: Path):
         _call("add_book", {"path": "/no/such/file.epub"})
 
     assert "file" in str(excinfo.value).lower()
+
+
+# ---------------------------------------------------------------- FOLDER IMPORT
+
+
+@pytest.mark.e2e
+def test_import_folder_happy_path_returns_three_buckets_and_backup(
+    env: Path, tmp_path: Path
+):
+    # BIMPORT-03/06: recursive import returns added (real id + metadata),
+    # empty duplicate/failed, and a backup path.
+    source = tmp_path / "src"
+    source.mkdir()
+    epub = _sample_epub(source, "book.epub")
+
+    result = _call("import_folder", {"path": str(source)})
+
+    assert result["status"] == "imported"
+    assert len(result["added"]) == 1
+    assert result["added"][0]["path"] == str(epub)
+    assert isinstance(result["added"][0]["book_id"], int)
+    assert result["added"][0]["book"]["id"] == result["added"][0]["book_id"]
+    assert result["duplicate"] == []
+    assert result["failed"] == []
+    assert result["backup"]
+
+
+@pytest.mark.e2e
+def test_import_folder_nonexistent_path_is_tool_error(env: Path):
+    # BIMPORT-02: a non-directory path is an explicit tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call("import_folder", {"path": "/no/such/directory"})
+
+    assert "directory" in str(excinfo.value).lower()
+
+
+@pytest.mark.e2e
+def test_import_folder_description_documents_contract():
+    # T4 Done-when: docstring documents recursive/additive/no-token, the
+    # 500 cap, the three buckets, and that non-ebook files are ignored.
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["import_folder"].description.lower()
+
+    assert "recursive" in text
+    assert "additive" in text and "no confirmation token" in text
+    assert "500" in text
+    assert "added" in text and "duplicate" in text and "failed" in text
+    assert "ignoring" in text or "ignored" in text
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_import_folder_calls(env: Path, tmp_path: Path):
+    # Design Risks: stdout is the MCP framing channel; import_folder must
+    # stay clean.
+    source = tmp_path / "src"
+    source.mkdir()
+    _sample_epub(source, "book.epub")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _call("import_folder", {"path": str(source)})
+
+    assert buffer.getvalue() == ""
 
 
 # ------------------------------------------------------------------- REMOVE
@@ -279,6 +663,82 @@ def test_remove_book_description_states_recoverable_two_step():
     assert "recoverable" in text
     assert "recycle bin" in text
     assert "review" in text and "confirm" in text
+
+
+# ---------------------------------------------------------- MERGE DUPLICATE GROUP
+
+
+@pytest.fixture
+def merge_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
+    """Seed a survivor (EPUB only) and a loser (EPUB + PDF), distinct files."""
+    runner = CalibredbRunner(env)
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) < 2:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    shutil.copy2(sources[0], tmp_path / "survivor.epub")
+    shutil.copy2(sources[1], tmp_path / "loser.epub")
+    survivor_id = runner.add(tmp_path / "survivor.epub").book_id
+    loser_id = runner.add(tmp_path / "loser.epub").book_id
+    assert survivor_id is not None and loser_id is not None
+    fake_pdf = tmp_path / "extra.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+    runner.add_format(loser_id, fake_pdf)
+    return survivor_id, loser_id
+
+
+@pytest.mark.e2e
+def test_merge_duplicate_group_plan_then_apply_round_trip(
+    merge_seeded: tuple[int, int],
+):
+    # MERGE-01/04/07/08: plan (no token) -> per-loser format split + token, no
+    # write; apply (token) -> survivor gains the unique format, loser is gone.
+    survivor_id, loser_id = merge_seeded
+
+    plan = _call(
+        "merge_duplicate_group",
+        {"survivor_id": survivor_id, "loser_ids": [loser_id]},
+    )
+
+    assert plan["status"] == "plan"
+    entry = plan["losers"][0]
+    assert entry["book_id"] == loser_id
+    assert entry["formats_to_add"] == ["PDF"]
+    assert entry["formats_already_present"] == ["EPUB"]
+    assert _call("get_book", {"book_id": survivor_id})["formats"] == ["EPUB"]
+
+    result = _call(
+        "merge_duplicate_group",
+        {
+            "survivor_id": survivor_id,
+            "loser_ids": [loser_id],
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert result["status"] == "merged"
+    assert set(result["survivor_formats"]) == {"EPUB", "PDF"}
+    assert result["merged"] == [
+        {
+            "loser_id": loser_id,
+            "formats_added": ["PDF"],
+            "trash_location": result["merged"][0]["trash_location"],
+        }
+    ]
+    assert result["failed"] == []
+    with pytest.raises(ToolError):
+        _call("get_book", {"book_id": loser_id})  # gone
+
+
+@pytest.mark.e2e
+def test_merge_duplicate_group_invalid_loser_ids_is_tool_error(seeded: int):
+    # MERGE-03: survivor_id inside loser_ids surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "merge_duplicate_group",
+            {"survivor_id": seeded, "loser_ids": [seeded]},
+        )
+
+    assert "loser_ids" in str(excinfo.value)
 
 
 @pytest.mark.e2e
@@ -354,6 +814,88 @@ def test_convert_book_description_states_additive():
 
     assert "additive" in text or "keep" in text
     assert "refuse" in text
+
+
+# --------------------------------------------------------------- BULK CONVERT
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_additive_round_trip(two_seeded: list[int]):
+    # BCONV-01/04: broadcast convert to PDF; both books read back EPUB+PDF
+    # (additive) and appear in ``converted`` with their re-read formats.
+    result = _call(
+        "convert_book_bulk", {"book_ids": two_seeded, "target_format": "pdf"}
+    )
+
+    assert result["status"] == "converted"
+    assert {c["book_id"] for c in result["converted"]} == set(two_seeded)
+    for book_id in two_seeded:
+        assert set(_call("get_book", {"book_id": book_id})["formats"]) == {
+            "EPUB",
+            "PDF",
+        }
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_mixed_batch_returns_three_buckets(two_seeded: list[int]):
+    # BCONV-02/03: a book already having the target -> skipped, a missing id ->
+    # failed, and a third book -> converted; all three buckets routed correctly.
+    already = two_seeded[0]
+    _call("convert_book", {"book_id": already, "target_format": "pdf"})  # EPUB+PDF
+    to_convert = two_seeded[1]
+
+    result = _call(
+        "convert_book_bulk",
+        {"book_ids": [already, to_convert, 999999], "target_format": "pdf"},
+    )
+
+    assert {c["book_id"] for c in result["converted"]} == {to_convert}
+    assert {s["book_id"] for s in result["skipped"]} == {already}
+    assert {f["book_id"] for f in result["failed"]} == {999999}
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_empty_ids_is_tool_error(env: Path):
+    # BCONV-06: empty book_ids is rejected as invalid input at the boundary.
+    with pytest.raises(ToolError) as excinfo:
+        _call("convert_book_bulk", {"book_ids": [], "target_format": "pdf"})
+
+    assert "book_ids" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_over_cap_is_tool_error(env: Path):
+    # BCONV-06: a batch over the 50-book cap surfaces a clear tool error.
+    with pytest.raises(ToolError) as excinfo:
+        _call(
+            "convert_book_bulk",
+            {"book_ids": list(range(1, 52)), "target_format": "epub"},
+        )
+
+    assert "50" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_convert_book_bulk_description_documents_contract():
+    # T3 Done-when: docstring documents ADDITIVE/no-token, the 50-book cap, the
+    # three buckets, and that skipped is a benign no-op (not a failure).
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    text = tools["convert_book_bulk"].description.lower()
+
+    assert "additive" in text or "keep" in text
+    assert "50" in text
+    assert "converted" in text and "skipped" in text and "failed" in text
+    assert "benign" in text  # skipped is documented as a benign no-op, not a failure
+
+
+@pytest.mark.e2e
+def test_stdout_stays_clean_across_bulk_convert_calls(seeded: int):
+    # Design Risks: stdout is the MCP framing channel; bulk convert must stay clean.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _call("convert_book_bulk", {"book_ids": [seeded], "target_format": "pdf"})
+
+    assert buffer.getvalue() == ""
 
 
 # -------------------------------------------------------------- DUPLICATES
@@ -491,5 +1033,68 @@ def test_stdout_stays_clean_across_p2_tool_calls(mailer_seeded: int, smtp_record
         _call("find_duplicates", {})
         _call("convert_book", {"book_id": mailer_seeded, "target_format": "pdf"})
         _call("email_book", {"book_id": mailer_seeded, "recipient": "bob@x.com"})
+
+    assert buffer.getvalue() == ""
+
+
+# --------------------------------------------------------------------- STATS
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_returns_well_formed_profile(
+    env: Path, tmp_path: Path
+):
+    # STATS-01-01: totals.books matches count_books(); the profile shape is
+    # well-formed and the known duplicate group is present.
+    runner = CalibredbRunner(env)
+    id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
+    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    id2 = runner.add(tmp_path / "two.epub").book_id
+    runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
+    runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
+
+    stats = _read_resource("calibre://library/stats")
+
+    assert stats["totals"]["books"] == server._get_library().count_books()
+    groups = stats["data_quality_flags"]["duplicate_title_groups"]
+    assert {b["id"] for b in groups[0]["books"]} == {id1, id2}
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_empty_library_is_zeroed_not_an_error(env: Path):
+    # STATS-01-02 (AC-2): empty library -> valid zeroed profile, never an error.
+    stats = _read_resource("calibre://library/stats")
+
+    assert stats["totals"]["books"] == 0
+    assert stats["data_quality_flags"]["duplicate_title_groups"] == []
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_unreadable_db_is_resource_error(env: Path):
+    # STATS-01-04 (AC-4): a corrupt metadata.db (present on disk, unreadable
+    # as SQLite) -> a named ResourceError, never a silent empty/wrong profile.
+    (env / "metadata.db").write_bytes(b"not a real sqlite file at all")
+
+    with pytest.raises(ResourceError) as excinfo:
+        _read_resource("calibre://library/stats")
+
+    assert "file is not a database" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_two_reads_are_identical(seeded: int):
+    # STATS-01-05 (AC-5): deterministic — two reads with no changes match.
+    first = _read_resource("calibre://library/stats")
+    second = _read_resource("calibre://library/stats")
+
+    assert first == second
+
+
+@pytest.mark.e2e
+def test_library_stats_resource_stdout_stays_clean(seeded: int):
+    # Design Risks: reading the resource must never write to stdout.
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _read_resource("calibre://library/stats")
 
     assert buffer.getvalue() == ""

@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import functools
 import logging
+import sqlite3
 import sys
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from .config import load_config
 from .errors import CalibreMcpError
@@ -64,6 +65,28 @@ def _map_errors(fn: Callable[..., dict]) -> Callable[..., dict]:
             return fn(*args, **kwargs)
         except CalibreMcpError as exc:
             raise ToolError(str(exc)) from exc
+
+    return wrapper
+
+
+def _map_resource_errors(fn: Callable[[], dict]) -> Callable[[], dict]:
+    """Map every known read failure to an explicit ``ResourceError`` (AC-4).
+
+    Mirrors ``_map_errors`` for the resource surface: a ``CalibreMcpError``
+    (e.g. bad config) or a raw ``sqlite3.Error``/``OSError`` (e.g. missing or
+    corrupt ``metadata.db``) surfaces as a named ``ResourceError`` instead of a
+    silent empty/wrong profile. Catching these does not violate the "no SQL
+    outside the read layer" invariant (AD-001) — no SQL is issued here.
+    """
+
+    @functools.wraps(fn)
+    def wrapper() -> dict:
+        try:
+            return fn()
+        except CalibreMcpError as exc:
+            raise ResourceError(str(exc)) from exc
+        except (sqlite3.Error, OSError) as exc:
+            raise ResourceError(str(exc)) from exc
 
     return wrapper
 
@@ -157,6 +180,155 @@ def update_metadata(
 
 @mcp.tool()
 @_map_errors
+def update_metadata_bulk(
+    book_ids: list[int],
+    fields: dict[str, Any],
+    list_mode: str = "replace",
+    confirmation_token: str | None = None,
+) -> dict:
+    """Broadcast one set of field changes to many books, two-step plan->confirm
+    (BEDIT-01..09).
+
+    HOST: surface the returned per-book plan (each book's current->proposed
+    diff) to the USER and only re-call with ``confirmation_token`` after they
+    approve.
+
+    Without a token: nothing is written; returns a diff per book (or
+    ``found: false`` for a vanished id) plus one deterministic
+    ``confirmation_token`` covering the whole batch. With a matching token:
+    backs up ``metadata.db`` ONCE, then applies every book best-effort — a
+    single book's failure (vanished id, calibredb error) never voids the
+    batch; the result reports ``applied`` (with each book's re-read affected
+    fields) and ``failed`` (with the error) separately, so a partial failure
+    is never reported as a fake "all succeeded". A mismatched token is
+    refused before any write.
+
+    ``list_mode`` applies to the list-valued fields (authors, tags,
+    languages): ``replace`` (default) OVERWRITES each book's field with
+    exactly the supplied values — a footgun for broadcast tagging; ``add``
+    unions the supplied values into each book's existing ones (nothing
+    lost); ``remove`` subtracts the supplied values from each book's existing
+    ones (missing values ignored). Note Calibre may re-normalize written list
+    values (case-folding/dedup), so a re-read may not byte-match the plan.
+    """
+    return _get_library().update_metadata_bulk(
+        book_ids, fields, list_mode=list_mode, token=confirmation_token
+    )
+
+
+@mcp.tool()
+@_map_errors
+def rename_author(
+    old_name: str,
+    new_name: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Rename an author across every book they're credited on, two-step
+    plan->confirm (ORGN-01, ARENAME-01..08).
+
+    HOST: surface the returned per-book plan (each book's ``authors``
+    current->proposed) to the USER and only re-call with
+    ``confirmation_token`` after they approve.
+
+    ``old_name`` is matched EXACTLY (case-sensitive) against every book
+    credited to that author. Without a token: nothing is written; discovers
+    every affected book and returns its resolved ``authors`` diff plus one
+    deterministic ``confirmation_token`` covering the whole batch. If
+    ``old_name`` matches no author, or ``new_name`` is blank/equal to
+    ``old_name``, the call is rejected before any backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then applies every
+    affected book best-effort in ``book_id`` order. The rename is
+    CO-AUTHOR-SAFE: only ``old_name`` is replaced on each book — every other
+    credited author and their order is preserved (never an overwrite of the
+    whole author list). Renaming onto a name already used by another author
+    MERGES the two (a book crediting both collapses to a single entry,
+    deduped). A single book's failure never voids the batch; the result
+    reports ``applied`` (with each book's re-read resulting ``authors``) and
+    ``failed`` (with the error) separately — never a false "all renamed". A
+    mismatched token is refused before any write.
+    """
+    return _jsonify(
+        _get_library().rename_author(old_name, new_name, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
+def rename_tag(
+    old_tag: str,
+    new_tag: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Rename a tag across every book carrying it, two-step plan->confirm
+    (ORGN-02, TRENAME-01..08).
+
+    HOST: surface the returned per-book plan (each book's ``tags``
+    current->proposed) to the USER and only re-call with
+    ``confirmation_token`` after they approve.
+
+    ``old_tag`` is matched EXACTLY (case-sensitive) against every book carrying
+    that tag. Without a token: nothing is written; discovers every affected book
+    and returns its resolved ``tags`` diff plus one deterministic
+    ``confirmation_token`` covering the whole batch. If ``old_tag`` matches no
+    tag, or ``new_tag`` is blank/equal to ``old_tag``, the call is rejected
+    before any backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then applies every
+    affected book best-effort in ``book_id`` order. The rename is
+    OTHER-TAG-SAFE: only ``old_tag`` is replaced on each book — every other tag
+    is preserved (never an overwrite of the whole tag set). Renaming onto a tag
+    already in use MERGES the two (a book carrying both collapses to a single
+    entry, deduped). Tags are a set, so re-read ordering is Calibre's, not the
+    plan's. A single book's failure never voids the batch; the result reports
+    ``applied`` (with each book's re-read resulting ``tags``) and ``failed``
+    (with the error) separately — never a false "all renamed". A mismatched
+    token is refused before any write.
+    """
+    return _jsonify(
+        _get_library().rename_tag(old_tag, new_tag, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
+def rename_series(
+    old_series: str,
+    new_series: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Rename a series across every book in it, two-step plan->confirm
+    (ORGN-04, SRENAME-01..08).
+
+    HOST: surface the returned per-book plan (each book's ``series``
+    current->proposed, with its unchanged ``series_index``) to the USER and
+    only re-call with ``confirmation_token`` after they approve.
+
+    ``old_series`` is matched EXACTLY (case-sensitive) against every book
+    whose series is that name. Without a token: nothing is written; discovers
+    every affected book and returns its ``series`` diff plus one deterministic
+    ``confirmation_token`` covering the whole batch. If ``old_series`` matches
+    no book, or ``new_series`` is blank/equal to ``old_series``, the call is
+    rejected before any backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then applies every
+    affected book best-effort in ``book_id`` order. The rename writes the
+    ``series`` field ONLY — each book's ``series_index`` (its position in the
+    series) is PRESERVED, never reset or renumbered. Renaming onto a series
+    name already in use MERGES the two (each book keeps its own index; index
+    collisions are left as-is, not renumbered). A single book's failure never
+    voids the batch; the result reports ``applied`` (with each book's re-read
+    resulting ``series``/``series_index``) and ``failed`` (with the error)
+    separately — never a false "all renamed". A mismatched token is refused
+    before any write.
+    """
+    return _jsonify(
+        _get_library().rename_series(old_series, new_series, token=confirmation_token)
+    )
+
+
+@mcp.tool()
+@_map_errors
 def add_book(path: str) -> dict:
     """Import an ebook file into the library by local filesystem path (ADD-01..04).
 
@@ -166,6 +338,35 @@ def add_book(path: str) -> dict:
     fake id); a ``calibredb`` failure surfaces its stderr.
     """
     return _jsonify(_get_library().add_book(path))
+
+
+@mcp.tool()
+@_map_errors
+def import_folder(path: str) -> dict:
+    """Import every ebook file under a directory, recursively (BULK-03).
+
+    ADDITIVE, NO confirmation token (like ``add_book``). Discovers every
+    ebook-candidate file under ``path`` — recursive (includes subfolders),
+    case-insensitive whitelist of unambiguous ebook formats — silently
+    ignoring non-ebook and hidden/dotfiles (they are never reported). Max 500
+    ebook candidates per call; a larger tree is rejected as invalid input
+    before any backup or import. Backs up ``metadata.db`` ONCE before the
+    batch.
+
+    Best-effort, honest THREE-bucket result — every candidate lands in
+    exactly one: ``added`` (with its new ``book_id`` and parsed metadata);
+    ``duplicate`` (already in the library — surfaced, never re-added, never a
+    fake id); or ``failed`` (a real per-file ``calibredb`` error). A single
+    file failing never aborts the batch and is never reported as a fake "all
+    imported".
+    """
+    result = _get_library().import_folder(path)
+    return {
+        **result,
+        "added": [
+            {**entry, "book": _book_to_dict(entry["book"])} for entry in result["added"]
+        ],
+    }
 
 
 @mcp.tool()
@@ -192,6 +393,51 @@ def remove_book(book_id: int, confirmation_token: str | None = None) -> dict:
 
 @mcp.tool()
 @_map_errors
+def merge_duplicate_group(
+    survivor_id: int,
+    loser_ids: list[int],
+    confirmation_token: str | None = None,
+) -> dict:
+    """Merge a duplicate group onto a caller-chosen survivor, two-step
+    plan->confirm (ORGN-03, MERGE-01..08).
+
+    HOST: surface the returned plan (per-loser formats to add vs. already
+    present, and that every loser will be recoverably deleted) to the USER and
+    only re-call with ``confirmation_token`` after they approve.
+
+    You choose ``survivor_id`` (the record to keep) and ``loser_ids`` (the
+    records to fold into it) — typically from a ``find_duplicates`` group. The
+    merge is FORMATS-ONLY: the survivor's metadata (title, authors, tags, …)
+    is never touched, only its file formats change. Without a token: nothing
+    is written; returns, per loser, ``formats_to_add`` vs.
+    ``formats_already_present`` on the survivor, plus one deterministic
+    ``confirmation_token`` covering the whole batch. ``survivor_id``/loser ids
+    must all exist; ``loser_ids`` must be non-empty, without duplicates, and
+    must not include ``survivor_id`` — any violation is rejected before any
+    backup.
+
+    With a matching token: backs up ``metadata.db`` ONCE, then processes each
+    loser best-effort in ascending id order. DATA-SAFE ORDERING: a loser's
+    formats are attached onto the survivor first (``add_format
+    --dont-replace`` — the survivor's existing copy always wins on conflict,
+    never duplicated); the loser is deleted — RECOVERABLY (trash copy +
+    recycle bin, never permanent) — only after every one of its formats is
+    confirmed on the survivor. If attaching a loser's format fails, that loser
+    is left untouched and reported in ``failed``; the batch continues with the
+    remaining losers — never a false "all merged". The result reports
+    ``merged`` (each loser's formats added + trash location) and ``failed``
+    separately, plus the survivor's re-read resulting ``formats`` (the proven
+    union). A mismatched token is refused before any write.
+    """
+    return _jsonify(
+        _get_library().merge_duplicate_group(
+            survivor_id, loser_ids, token=confirmation_token
+        )
+    )
+
+
+@mcp.tool()
+@_map_errors
 def convert_book(book_id: int, target_format: str) -> dict:
     """Convert a book to ``target_format`` via ``ebook-convert`` (CONV-01).
 
@@ -203,6 +449,29 @@ def convert_book(book_id: int, target_format: str) -> dict:
     stderr and adds nothing.
     """
     return _jsonify(_get_library().convert_book(book_id, target_format))
+
+
+@mcp.tool()
+@_map_errors
+def convert_book_bulk(book_ids: list[int], target_format: str) -> dict:
+    """Convert many books to one ``target_format`` via ``ebook-convert`` (BULK-02).
+
+    ADDITIVE: each book keeps its existing format(s) and gains ``target_format``;
+    NO confirmation token (like ``convert_book``). Broadcasts one target to every
+    id in ``book_ids`` — max 50 per call (a larger batch is rejected as invalid
+    input). Supported targets: epub, azw3, mobi, pdf.
+
+    Best-effort, honest THREE-bucket result — every book lands in exactly one:
+    ``converted`` (with its re-read resulting ``formats``); ``skipped`` (a BENIGN
+    no-op — the book already has the target, or has no source file — this is NOT
+    a failure); or ``failed`` (a real per-book error: corrupt/unsupported source,
+    or an id that does not exist). A single book failing never aborts the batch
+    and is never reported as a fake "all succeeded"; every id is accounted for
+    (converted + skipped + failed == book_ids). Backs up ``metadata.db`` once
+    before the batch. Conversions run sequentially and can be slow for a large
+    batch.
+    """
+    return _get_library().convert_book_bulk(book_ids, target_format)
 
 
 @mcp.tool()
@@ -243,6 +512,22 @@ def email_book(
     return _get_library().email_book(
         book_id, recipient, format=format, token=confirmation_token
     )
+
+
+@mcp.resource(
+    "calibre://library/stats",
+    name="library_stats",
+    mime_type="application/json",
+)
+@_map_resource_errors
+def library_stats_resource() -> dict:
+    """Aggregate baseline profile of the library (STATS-01): totals, format/
+    language mix, metadata completeness, identifier types, top authors/tags,
+    and data-quality flags (including duplicate-title groups). Read-only,
+    parameter-free, and lock-independent — known on connect without a tool
+    call.
+    """
+    return _get_library().library_stats()
 
 
 def main() -> None:

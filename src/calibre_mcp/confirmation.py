@@ -12,13 +12,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from typing import Any
 
 from .errors import ConfirmationError
 
 _TOKEN_LENGTH = 16
 
 
-def plan_token(op: str, book_id: int, payload: dict) -> str:
+def plan_token(op: str, book_id: int, payload: dict[str, Any]) -> str:
     """Return a deterministic token for ``op|book_id|payload``.
 
     The payload is normalized with JSON sorted keys so logically-equal payloads
@@ -29,7 +30,7 @@ def plan_token(op: str, book_id: int, payload: dict) -> str:
     return digest[:_TOKEN_LENGTH]
 
 
-def verify(op: str, book_id: int, payload: dict, token: str) -> None:
+def verify(op: str, book_id: int, payload: dict[str, Any], token: str) -> None:
     """Raise ``ConfirmationError`` when ``token`` does not match the recomputed
     plan token for this exact operation (EDIT-03, REM-05)."""
     expected = plan_token(op, book_id, payload)

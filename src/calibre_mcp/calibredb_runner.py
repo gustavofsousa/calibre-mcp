@@ -13,6 +13,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .errors import (
     CalibredbError,
@@ -92,15 +93,23 @@ class CalibredbRunner:
             return []
         return [int(piece) for piece in out.split(",") if piece.strip()]
 
-    def set_metadata(self, book_id: int, fields: dict) -> None:
+    def set_metadata(self, book_id: int, fields: dict[str, Any]) -> None:
         """Apply ``fields`` via one ``--field`` per pair (EDIT-02).
 
-        List-valued fields (authors/tags/languages) are comma-joined as Calibre
-        expects.
+        List-valued fields are joined field-specifically: ``authors`` with
+        ``" & "``, other list fields (tags/languages) with ``,`` (AD-022).
+        ``calibredb set_metadata --field "authors:A,B"`` mashes co-authors into
+        a single author entity ``"A|B"``; ``" & "`` creates two distinct
+        authors, matching how Calibre itself displays/stores multi-author
+        credits.
         """
         args = ["set_metadata", str(book_id)]
         for name, value in fields.items():
-            joined = ",".join(value) if isinstance(value, list) else str(value)
+            if isinstance(value, list):
+                separator = " & " if name == "authors" else ","
+                joined = separator.join(value)
+            else:
+                joined = str(value)
             args += ["--field", f"{name}:{joined}"]
         self._run(args)
 

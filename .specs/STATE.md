@@ -69,9 +69,11 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   and email (attachment). Reads stay in the read layer (AD-001); `SqliteReader` gains the library root
   in its constructor.
 
-- **AD-018 — Project direction: personal use, polished (not open source).** Confirmed 2026-07-17.
-  Single user, single library; no packaging/distribution/multi-library-config work planned.
-  STATS-01 is now in-spec (Phase 1); see `.specs/features/library-stats/spec.md`.
+- **AD-018 (SUPERSEDED by AD-023) — Project direction: personal use, polished (not open source).**
+  Confirmed 2026-07-17. Single user, single library; no packaging/distribution/multi-library-config
+  work planned. STATS-01 is now in-spec (Phase 1); see `.specs/features/library-stats/spec.md`.
+  Superseded 2026-07-31: the repo was already public + MIT since 2026-07-17, so this line no longer
+  described reality; AD-023 adopts open-source-as-brand explicitly.
 - **AD-019 — Ambition: full GUI replacement, resequenced roadmap.** Confirmed 2026-07-17. User
   wants calibre-mcp to eventually cover everything they currently use the Calibre GUI for — covers,
   bulk operations, author/tag/series organization, library maintenance — "the best server
@@ -81,30 +83,55 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   primitives) instead of Metadata Enrichment — enrichment/covers move to Phase 3 since they
   introduce the project's first outbound-network dependency and deserve their own hardening pass.
   Full roadmap — phases, candidate features, phase-gates — lives in `.specs/ROADMAP.md`.
+- **AD-020 — Multi-book batch pattern (best-effort loop + batch token).** Established by BULK-01,
+  reused across Phase 2. A multi-book operation (a) validates batch-level input **before** any
+  backup/write (bad field/target/id has no valid interpretation for the batch → fail fast, no
+  partial state); (b) takes **exactly one** `metadata.db` backup before the loop as the single
+  rollback point (AD-011); (c) processes `sorted(book_ids)` **best-effort** — a per-book failure
+  never aborts the batch and never reports a fake "all succeeded"; every book lands in exactly one
+  result bucket (`applied`/`failed` for BULK-01; `converted`/`skipped`/`failed` for BULK-02, which
+  adds `skipped` for benign no-ops). For **destructive/overwriting** batches a single deterministic
+  batch **confirmation token** — `plan_token` over a sentinel `book_id=0` + payload
+  `{book_ids: sorted, …}` — gates the whole batch (AD-012); for **additive** batches (convert) there
+  is **no token** (AD-016). ORGN-01/02/03 consume this pattern as their apply step.
+
+- **AD-021 — Filesystem discovery is its own pure module.** Directory scanning (folder import,
+  BULK-03, and any future tree-walk) lives in a dedicated pure module (`folder_scan.py`), never in
+  `SqliteReader` (metadata.db-only, AD-001/AD-017), never inline in the `CalibreLibrary` facade, and
+  never in the tool layer. Extends the existing invariant (tool layer touches no `sqlite3`/`subprocess`
+  directly) to name **filesystem-walk** as a third I/O kind that the facade *orchestrates* but does
+  not *perform*. The scan module has no `calibredb`/`sqlite3` dependency and reads the filesystem
+  only (`os.walk`, `followlinks=False`, hidden entries pruned). The facade converts a scan-time
+  `OSError` into an `InvalidInputError` so the tool-layer error mapping (`_map_errors`, which only
+  catches `CalibreMcpError`) stays whole. Established by BULK-03 (`folder-import`).
+
+- **AD-022 — `calibredb set_metadata` serializes authors with ` & `, other list fields with `,`.**
+  Establishes that the author field is separator-sensitive: `calibredb set_metadata --field
+  "authors:A,B"` creates a single author `"A|B"`, whereas `"authors:A & B"` creates two. The shared
+  write primitive (`CalibredbRunner.set_metadata`) therefore joins `authors` with `" & "` and
+  `tags`/`languages` with `","`. Corrects a latent multi-author bug that predated ORGN-01 (BULK-01's
+  author path was never exercised with more than one author). Established by ORGN-01 (`author-rename`).
+
+- **AD-023 — Direction: open-source-as-brand (supersedes AD-018).** Confirmed 2026-07-31. The
+  repo has been public + MIT since 2026-07-17, so "not open source" (AD-018) never matched reality;
+  this decision makes the posture explicit and acts on it. **Why:** market evidence — there are
+  already ~10 read-only Calibre MCP servers, all free, and MCP servers are near-impossible to
+  monetize directly (the host captures the value, not a local-file wrapper). Charging for
+  calibre-mcp is a dead end (wrong market, no moat, free competition). Its real leverage is
+  (a) a portfolio-grade proof of *how to design a mutation tool that's allowed to delete a user's
+  files* and (b) a reference prototype of a reusable **safe-mutation, human-in-the-loop MCP
+  pattern**. **Consequence:** the one defensible niche is *safe writes* — every competitor is
+  read-only/search. Positioning, README, and packaging lead with that differentiator (see Strategic
+  Horizon → Phase A in `.specs/ROADMAP.md`). Packaging becomes in-scope (reverses AD-018's "no
+  packaging"): frictionless `uvx --from git+…` install now, PyPI publish is a checkpointed one-way
+  door to decide later. Does not change AD-002/003 (still local stdio, no network transport) or the
+  single-library model (AD-007). The productize-the-pattern and vertical-that-pays bets (Phases B/C)
+  are strategy, recorded in the roadmap's Strategic Horizon, not committed calibre-mcp features.
 
 ## Backlog — deferred (post-P2)
 
-- **STATS-01 — Library baseline profile exposed by the server (P3, after P2).** Surface aggregate
-  library knowledge — totals, format/language breakdown, metadata completeness, identifier-type mix,
-  author/tag distribution, and data-quality flags (Unknown-author count, `0101-01-01` placeholder
-  pubdates, unused `series`/`rating`, duplicate-title groups) — so the host knows the library's shape
-  on connect **without** paging `list_books` (slow, context-heavy, and it even hid the id 61–114 range
-  when we first classified the library).
-  - **Motivation / prototype:** validated ad-hoc by reading `metadata.db` read-only and caching the
-    result at `.library-profile.json` (gitignored, personal data — never committed). That file is the
-    reference schema for what STATS-01 should compute. The direct-DB read caught a real duplicate
-    ("A fé explicada", ids 68 & 132) that the paginated listing missed.
-  - **Open design decision (resolve when picked up):**
-    - *Option A — MCP resource* (`resources/list` + `resources/read`, e.g. `calibre://library/stats`):
-      host can auto-load on connect; fits "known without a tool call". Freshness: compute on read, or
-      cache with a generated-at stamp + cheap invalidation.
-    - *Option B — `library_stats` read tool*: recomputed on demand from `metadata.db`; simpler, always
-      fresh, but the host must choose to call it (not auto-known).
-    - *Recommendation:* **A** for the auto-known-on-connect goal, computed on read (metadata.db is
-      small; the SQLite reader is already read-only and lock-independent). Reuse `SqliteReader` behind
-      the `CalibreLibrary` facade per the existing invariant — no new SQL in the tool/resource layer.
-  - **Scope guard:** read-only, additive, no write path; must not violate the stderr-only / arg-list
-    invariants. Deferred until P2 (CONV-01, ORG-01) ships and traction warrants.
+- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03 all shipped & Verified;
+  see Handoff. Next up is Phase 3 (Covers & Enrichment) — see `.specs/ROADMAP.md`.)
 
 ## Environment
 
@@ -114,28 +141,85 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 
 ## Handoff
 
-- **Phase:** P1 and P2 both COMPLETE and Verified. P1: all 10 tasks (T1–T10), 29/29 P1 requirements.
-  P2 (`calibre-management-p2`, 2026-07-17): all 10 tasks (T1–T10) — CONV-01 (`convert_book`), ORG-01
-  (`find_duplicates`), EMAIL-01 (`email_book`) — implemented, each its own atomic commit, executed
-  inline (user declined per-phase sub-agents). Full gate green: `ruff check` clean + `pytest` 137
-  passed (up from 88 at P1 baseline). `SqliteReader` constructor now takes `(db_path, library_path)`.
-  The independent Verifier ran after T10, found 1 surviving mutant + 2 coverage gaps (backup-before-
-  `add_format` ordering untested for `convert_book`; EMAIL-01 AC-3 explicit-format success path
-  untested; T10's stdout-clean assertion didn't cover the 3 new tools) — all three fixed and
-  re-verified PASS (iteration 2 of the fix→re-verify loop). Report: `.specs/features/
-  calibre-management-p2/validation.md`. **Also fixed in T8**: a real bug in T3's `format_files`
-  (`Path.with_suffix` corrupted filenames when Calibre's `data.name` contains a literal period, e.g.
-  "Robert C. Martin") — now built by concatenation instead.
-- **Next step:** STATS-01 spec finalized this session (`.specs/features/library-stats/spec.md`,
-  Option A — MCP resource, user-confirmed). Ready for Design/Execute. Full project roadmap
-  (Phase 1 STATS-01 → Phase 2 metadata enrichment → Phase 3 device/distribution integrations →
-  Phase 4 background polish) recorded in `.specs/ROADMAP.md` per AD-018.
-- **Spec:** `.specs/features/calibre-management/spec.md` (P1, 31 requirements, 29 P1 / 2 P2) and
-  `.specs/features/calibre-management-p2/spec.md` (P2, 3 requirements — CONV-01/ORG-01/EMAIL-01, all
-  Verified).
-- **Design:** `.specs/features/calibre-management/design.md` (P1, 8 modules) and
-  `.specs/features/calibre-management-p2/design.md` (P2, adds `EbookConvertRunner`,
-  `CalibreSmtpRunner`, `SmtpConfig`, reader/`calibredb_runner` extensions).
-- **Tasks:** `.specs/features/calibre-management/tasks.md` (P1) and
-  `.specs/features/calibre-management-p2/tasks.md` (P2). Stack: uv + pytest + ruff.
-  Test-safety rule enforced via `scratch_library` fixture (writes never touch the real library).
+- **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 in full — BULK-01 +
+  BULK-02 + BULK-03 + ORGN-01 + ORGN-02 + ORGN-03 — all committed with independent-Verifier PASS
+  reports. **Phase 2 phase-gate is closed** (2026-07-31): a full curation session (retag a batch,
+  fix an author's name everywhere, resolve a duplicate group, import a folder) never requires the
+  Calibre GUI.
+  - **P1 / P2** (`calibre-management`, `calibre-management-p2`): read + curate + convert +
+    find_duplicates + email. `SqliteReader` constructor takes `(db_path, library_path)`.
+  - **STATS-01** (`library-stats`, Phase 1): `calibre://library/stats` MCP resource (Option A,
+    user-confirmed) — reader `library_stats()` aggregate profile + duplicate flags reusing ORG-01,
+    exposed via the resource surface with `_map_resource_errors`. Design/tasks/validation PASS in
+    `.specs/features/library-stats/`. Closed out in commit `f602fba`.
+  - **BULK-01** (`bulk-metadata-edit`, Phase 2): `update_metadata_bulk` — broadcast fields to N books
+    via one batch plan→confirm token + one backup + best-effort per-book `applied`/`failed`, with
+    `list_mode` add/remove/replace for list fields (new pure `bulk_edit.py`). Verifier PASS
+    (`.specs/features/bulk-metadata-edit/validation.md`). Established the AD-020 multi-book pattern.
+  - **BULK-02** (`bulk-convert`, Phase 2): `convert_book_bulk` — broadcast one `target_format` to N
+    books, additive/no-token (AD-016), one `metadata.db` backup before the batch, best-effort
+    **three-bucket** result `converted`/`skipped`/`failed` (AD-020, adds `skipped` for benign
+    no-ops). 50-book cap rejected as invalid input; duplicate/non-int/bool ids rejected pre-backup.
+    Refactor extracted a shared convert core (`_classify_convert` = skip-as-data / `_convert_and_attach`
+    = convert+add_format) reused by the single `convert_book`. Verifier PASS (3/3 mutants killed),
+    `.specs/features/bulk-convert/validation.md`. Commits `c054920`/`af071ab`/`1bfb445`. One
+    user-approved decision: single `convert_book` now backs up *before* the shared convert (unifying
+    with the bulk one-backup order); its CONV-01 bogus-source assertion was aligned to spec AC-5
+    (a pre-convert snapshot is harmless under AD-011). Full suite: 211 passed; mypy + ruff clean.
+  - **BULK-03** (`folder-import`, Phase 2): `import_folder` — recursive ebook discovery under a
+    directory (new pure `folder_scan.py`, case-insensitive 19-ext whitelist, hidden/dotfile excluded,
+    no symlink-follow, sorted) imported additive/no-token (AD-016) in one batch: one `metadata.db`
+    backup before the loop, best-effort **three-bucket** result `added`/`duplicate`/`failed`
+    (AD-020). 500-candidate cap rejected pre-backup (boundary 500 accepted/501 rejected); non-dir and
+    unreadable-dir also rejected pre-backup. Refactor extracted a shared add core (`_import_one`,
+    no backup inside — L-006) reused by the single `add_book`. New **AD-021** (filesystem discovery
+    is its own pure module — the sqlite/subprocess invariant gains a third named I/O kind). Verifier
+    PASS (4/4 mutants killed), `.specs/features/folder-import/validation.md`. Commits
+    `bab26e1`/`076bc5e`/`9fd7b71`/`015fafe`. Full suite: 236 passed; mypy + ruff clean.
+  - **ORGN-01** (`author-rename`, Phase 2): `rename_author` — rename one author across every credited
+    book via one batch plan→confirm token, co-author-safe swap + in-book merge/dedupe
+    (`resolve_renamed_authors`, now aliasing the shared `rename_resolve.resolve_renamed_values`),
+    `books_by_author` exact-match discovery, one backup before the loop. Established **AD-022**
+    (`set_metadata` must join `authors` with `" & "`, not `,`, to avoid mashing co-authors into one
+    entity — a prerequisite correctness fix, also fixed BULK-01's latent same bug). Verifier PASS
+    (8/8 ARENAME, 3/3 mutants killed), `.specs/features/author-rename/validation.md`.
+  - **ORGN-02** (`tag-rename`, Phase 2): `rename_tag` — tag-scoped twin of ORGN-01: `books_by_tag`
+    discovery, the resolve rule *generalized* to shared `rename_resolve.resolve_renamed_values`
+    (author/tag now share one pure algebra instead of duplicating it) rather than cloned. No
+    prerequisite serialization fix needed — AD-022 already joins `tags` with `,` correctly. Tags are
+    a set: re-read assertions use set-equality, not positional order. Independent Verifier PASS
+    (8/8 TRENAME; two disjoint discrimination-sensor runs, author 3/3 + verifier 4/4, 7/7 killed),
+    `.specs/features/tag-rename/validation.md`.
+  - **ORGN-03** (`merge-duplicate-group`, Phase 2): `merge_duplicate_group` — the one Phase-2
+    organization feature that **deletes book records**. User-decided scope (2026-07-31):
+    caller-chosen `survivor_id`/`loser_ids` (no auto-pick), **formats-only** merge (survivor metadata
+    untouched — field enrichment deferred to Phase 3). No new mutation primitive: orchestrates
+    already-Verified `format_files`/`add_format --dont-replace`/the `remove_book` recoverable-delete
+    sequence, gated like `remove_book` extended to an AD-020 batch. Core invariant — a loser's
+    formats are attached to the survivor **before** that loser is recoverably deleted; an attach
+    failure leaves the loser untouched. Independent Verifier PASS (8/8 MERGE; two disjoint sensor
+    runs, author 3/3 + verifier 4/4, 7/7 killed) **plus a structural code-trace** confirming the
+    removal lines are unreachable except after a fully-completed attach loop — the data-safety
+    ordering is a guarantee, not just a tested behavior. `.specs/features/merge-duplicate-group/validation.md`.
+- **In progress — ORGN-04** (`series-rename`, Phase 2 follow-on, closes the AD-019 author/tag/series
+  organization triad): `rename_series` — series-scoped sibling of ORGN-01/02, T1-T3 implemented
+  (`books_by_series` discovery, facade plan→confirm batch, MCP tool), all commits green
+  (ruff/mypy/pytest). **Status: Implementing, awaiting independent Verifier PASS** — T4 (this entry)
+  is the traceability closeout, not the Verified mark. Key divergence from ORGN-01/02: series is a
+  single-valued field, so there is no list resolver — the apply writes `{"series": new_series}`
+  ONLY, never `series_index`, so each book's position survives the rename (SRENAME-07, empirically
+  verified against `calibredb` and covered by a fractional-index (`7.5`) round-trip test). The real
+  library has 0 books in any series (`series_unused`), so all new tests seed a `scratch_library`
+  rather than anchoring on the real one. Spec/design/tasks at `.specs/features/series-rename/`.
+- **Next:** dispatch the independent Verifier for ORGN-04 (spec-anchored check + discrimination
+  sensor) — Execute is not done until it PASSes. After that: Phase 3 (Covers & Enrichment) — first
+  feature needing a new outbound-network AD (see ROADMAP.md's open architectural question). Full
+  roadmap in `.specs/ROADMAP.md`.
+- **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
+  `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
+  `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
+  `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
+  `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
+  Implementing). Stack: uv + pytest + ruff; test-safety rule enforced via the `scratch_library`
+  fixture (writes never touch the real library). Full build gate re-run as the T4 closeout
+  regression: 307 passed, 0 failed; mypy + ruff clean.

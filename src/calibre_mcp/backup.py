@@ -12,6 +12,10 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sqlite_reader import Book
 
 DEFAULT_RETENTION = 20
 _TRASH_DIR = "trash"
@@ -87,7 +91,7 @@ def _prune(backup_root: Path, retention: int) -> None:
 
 
 def trash_book_files(
-    book,
+    book: Book,
     library_path: Path,
     backup_root: Path,
 ) -> TrashResult:

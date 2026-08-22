@@ -20,7 +20,7 @@ import pytest
 
 from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.errors import BookNotFoundError, InvalidInputError
-from calibre_mcp.sqlite_reader import Book, SqliteReader
+from calibre_mcp.sqlite_reader import Book, LibraryStats, SqliteReader
 
 REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
 
@@ -83,6 +83,83 @@ def test_get_book_preserves_multi_author_order(reader: SqliteReader):
         "Francisco Adolfo de Varnhagen",
         "João Capistrano de Abreu",
     ]
+
+
+@pytest.mark.integration
+def test_books_by_author_finds_every_book_ascending_sorted(reader: SqliteReader):
+    # ARENAME-01: "Papa Francisco" credits books 1,2,4,5 (verified in the real
+    # library) -- returned ascending regardless of underlying link-table order.
+    ids = reader.books_by_author("Papa Francisco")
+
+    assert ids == [1, 2, 4, 5]
+
+
+@pytest.mark.integration
+def test_books_by_author_finds_coauthored_book_by_either_credited_name(
+    reader: SqliteReader,
+):
+    # ARENAME-01: book 27 credits two authors; matching by either name finds it.
+    assert 27 in reader.books_by_author("Francisco Adolfo de Varnhagen")
+    assert 27 in reader.books_by_author("João Capistrano de Abreu")
+
+
+@pytest.mark.integration
+def test_books_by_author_no_match_returns_empty_list(reader: SqliteReader):
+    # ARENAME-02: an author name credited to no book returns [] (not an error).
+    assert reader.books_by_author("Nonexistent Author XYZ") == []
+
+
+@pytest.mark.integration
+def test_books_by_tag_finds_every_book_ascending_sorted(reader: SqliteReader):
+    # TRENAME-01: "Poetry" tags books 9,15,17,19 (verified in the real
+    # library) -- returned ascending regardless of underlying link-table order.
+    assert reader.books_by_tag("Poetry") == [9, 15, 17, 19]
+
+
+@pytest.mark.integration
+def test_books_by_tag_finds_a_multi_tag_book(reader: SqliteReader):
+    # TRENAME-01: book 15 carries several tags incl. "Poetry"; it is found.
+    assert 15 in reader.books_by_tag("Poetry")
+
+
+@pytest.mark.integration
+def test_books_by_tag_no_match_returns_empty_list(reader: SqliteReader):
+    # TRENAME-02: a tag on no book returns [] (not an error).
+    assert reader.books_by_tag("Nonexistent Tag XYZ") == []
+
+
+# --------------------------------------------------------- books_by_series
+# The real library has 0 books in any series (series_unused) -- these tests
+# seed a scratch_library instead of using the real-library `reader` fixture.
+
+
+@pytest.mark.integration
+def test_books_by_series_finds_every_book_ascending_sorted(
+    scratch_library: Path, tmp_path: Path
+):
+    # SRENAME-01: two books in "Old", one in "Other" -- only the "Old" pair
+    # is returned, ascending regardless of underlying link-table order.
+    runner = CalibredbRunner(scratch_library)
+    id2 = _seed_book(scratch_library, tmp_path, "two.epub", index=1)
+    id1 = _seed_book(scratch_library, tmp_path, "one.epub", index=0)
+    id3 = _seed_book(scratch_library, tmp_path, "three.epub", index=2)
+    runner.set_metadata(id2, {"series": "Old", "series_index": "2.0"})
+    runner.set_metadata(id1, {"series": "Old", "series_index": "1.0"})
+    runner.set_metadata(id3, {"series": "Other", "series_index": "1.0"})
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.books_by_series("Old") == sorted([id1, id2])
+
+
+@pytest.mark.integration
+def test_books_by_series_no_match_returns_empty_list(
+    scratch_library: Path, tmp_path: Path
+):
+    # SRENAME-02: a series on no book returns [] (not an error).
+    _seed_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.books_by_series("Nonexistent Series XYZ") == []
 
 
 @pytest.mark.integration
@@ -238,3 +315,121 @@ def test_find_duplicate_groups_no_duplicates_returns_empty_list(
     reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
 
     assert reader.find_duplicate_groups() == []
+
+
+# --------------------------------------------------------------- library_stats
+
+
+@pytest.mark.integration
+def test_library_stats_returns_every_ac1_sub_object(reader: SqliteReader):
+    # STATS-01-01: every AC-1 sub-object present, computed in one connection.
+    stats = reader.library_stats()
+
+    assert isinstance(stats, LibraryStats)
+    assert set(stats.totals) == {
+        "books",
+        "min_id",
+        "max_id",
+        "gapped_ids",
+        "next_id_hint",
+    }
+    assert isinstance(stats.formats, dict)
+    assert "unset" in stats.languages
+    assert set(stats.metadata_completeness) == {
+        "comments",
+        "publisher",
+        "tags",
+        "identifiers",
+        "languages",
+        "real_pubdate",
+        "series",
+        "rating",
+    }
+    for field in stats.metadata_completeness.values():
+        assert set(field) == {"filled", "pct"}
+    assert set(stats.authors) == {"distinct", "top"}
+    assert set(stats.tags) == {"distinct", "top"}
+    assert set(stats.data_quality) == {
+        "unknown_author_books",
+        "placeholder_pubdate_0101",
+        "series_unused",
+        "rating_unused",
+    }
+
+
+@pytest.mark.integration
+def test_library_stats_grounded_facts_against_real_library(reader: SqliteReader):
+    # STATS-01-01/02: grounded facts confirmed directly against metadata.db
+    # (170 books, ids 1-185, 64 placeholder pubdates, 14 Unknown-author books).
+    stats = reader.library_stats()
+
+    assert stats.totals["books"] == reader.count_books()
+    assert stats.totals["max_id"] + 1 == stats.totals["next_id_hint"]
+    assert stats.data_quality["placeholder_pubdate_0101"] == 64
+    assert stats.data_quality["unknown_author_books"] == 14
+    assert stats.metadata_completeness["comments"]["filled"] == 49
+    # Edge case: real (non-placeholder) pubdates are mutually exclusive with
+    # placeholder_pubdate_0101 and counted separately (170 - 64 = 106).
+    assert stats.metadata_completeness["real_pubdate"]["filled"] == 106
+    # Edge case: books with no language recorded land in an explicit "unset"
+    # bucket rather than being silently dropped from the total.
+    assert stats.languages["unset"] == 91
+    assert sum(stats.languages.values()) == stats.totals["books"]
+
+
+@pytest.mark.integration
+def test_library_stats_pct_guarded_and_tie_breakers_deterministic(
+    reader: SqliteReader,
+):
+    # STATS-01-05: pct is a real percentage (no ZeroDivision on a non-empty
+    # library); top lists carry an explicit tie-breaker so order is stable.
+    stats = reader.library_stats()
+
+    comments = stats.metadata_completeness["comments"]
+    assert comments["pct"] == round(100 * comments["filled"] / stats.totals["books"], 1)
+    assert len(stats.authors["top"]) <= 10
+    assert len(stats.tags["top"]) <= 10
+    author_counts = [entry["count"] for entry in stats.authors["top"]]
+    assert author_counts == sorted(author_counts, reverse=True)
+    # STATS-01-01 grounded: "Eiichirô Oda" (20 books) is the top author.
+    assert stats.authors["top"][0] == {"name": "Eiichirô Oda", "count": 20}
+
+
+@pytest.mark.integration
+def test_library_stats_two_reads_are_identical(reader: SqliteReader):
+    # STATS-01-05 (AC-5): deterministic — two reads with no DB change match.
+    first = reader.library_stats()
+    second = reader.library_stats()
+
+    assert first == second
+
+
+@pytest.mark.integration
+def test_library_stats_empty_library_returns_zeroed_snapshot(scratch_library: Path):
+    # STATS-01-02 (AC-2): empty library -> zeroed/empty snapshot, no error.
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    stats = reader.library_stats()
+
+    assert stats.totals == {
+        "books": 0,
+        "min_id": None,
+        "max_id": None,
+        "gapped_ids": 0,
+        "next_id_hint": 1,
+    }
+    assert stats.formats == {}
+    assert stats.languages == {"unset": 0}
+    assert all(
+        field["filled"] == 0 and field["pct"] == 0.0
+        for field in stats.metadata_completeness.values()
+    )
+    assert stats.identifier_types == {}
+    assert stats.authors == {"distinct": 0, "top": []}
+    assert stats.tags == {"distinct": 0, "top": []}
+    assert stats.data_quality == {
+        "unknown_author_books": 0,
+        "placeholder_pubdate_0101": 0,
+        "series_unused": True,
+        "rating_unused": True,
+    }

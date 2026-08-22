@@ -14,15 +14,19 @@ Invariant: the facade never imports sqlite3/subprocess directly.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
 
 from calibre_mcp import library as library_module
+from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.config import Config
 from calibre_mcp.errors import BookNotFoundError
 from calibre_mcp.library import CalibreLibrary
 from calibre_mcp.sqlite_reader import Book
+
+REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
 
 
 def _config_for(library_path: Path) -> Config:
@@ -31,6 +35,17 @@ def _config_for(library_path: Path) -> Config:
         db_path=library_path / "metadata.db",
         backup_root=library_path / ".calibre-mcp-backups",
     )
+
+
+def _seed_book(scratch_library: Path, tmp_path: Path, name: str, index: int) -> int:
+    sources = list(REAL_LIBRARY.glob("**/*.epub"))
+    if len(sources) <= index:
+        pytest.skip("not enough distinct sample .epub files in the real library")
+    dest = tmp_path / name
+    shutil.copy2(sources[index], dest)
+    result = CalibredbRunner(scratch_library).add(dest)
+    assert result.book_id is not None
+    return result.book_id
 
 
 @pytest.fixture
@@ -120,6 +135,81 @@ def test_get_book_unknown_id_raises_not_found(facade: CalibreLibrary):
         facade.get_book(999999)
 
     assert excinfo.value.book_id == 999999
+
+
+@pytest.mark.integration
+def test_library_stats_includes_known_duplicate_and_ordered_top_lists(
+    facade: CalibreLibrary,
+):
+    # STATS-01-01/06: full AC-1 shape composed; duplicate_title_groups reuses
+    # find_duplicate_groups() (the "A fé explicada" duplicate, ids 68 & 132);
+    # top-10 lists are length-capped and ordered by count descending.
+    stats = facade.library_stats()
+
+    groups = stats["data_quality_flags"]["duplicate_title_groups"]
+    matching = [g for g in groups if g["key"]["title"] == "A fé explicada"]
+    assert matching, "expected the known 'A fé explicada' duplicate group"
+    assert {b["id"] for b in matching[0]["books"]} == {68, 132}
+
+    assert len(stats["authors"]["top"]) <= 10
+    assert len(stats["tags"]["top"]) <= 10
+    author_counts = [entry["count"] for entry in stats["authors"]["top"]]
+    assert author_counts == sorted(author_counts, reverse=True)
+
+
+@pytest.mark.integration
+def test_library_stats_empty_library_returns_same_shape(scratch_library: Path):
+    # STATS-01-02 (AC-2): empty library -> same shape, zeroed/empty, no error.
+    facade = CalibreLibrary(_config_for(scratch_library))
+
+    stats = facade.library_stats()
+
+    assert stats["totals"]["books"] == 0
+    assert stats["authors"] == {"distinct": 0, "top": []}
+    assert stats["tags"] == {"distinct": 0, "top": []}
+    assert stats["data_quality_flags"] == {
+        "unknown_author_books": 0,
+        "placeholder_pubdate_0101": 0,
+        "series_unused": True,
+        "rating_unused": True,
+        "duplicate_title_groups": [],
+    }
+
+
+@pytest.mark.integration
+def test_library_stats_all_distinct_duplicate_groups_appear(
+    scratch_library: Path, tmp_path: Path
+):
+    # Edge case (spec.md): two or more distinct duplicate-title groups all
+    # appear in duplicate_title_groups, not just the first found.
+    runner = CalibredbRunner(scratch_library)
+    ids = [
+        _seed_book(scratch_library, tmp_path, f"seed{i}.epub", i) for i in range(4)
+    ]
+    runner.set_metadata(ids[0], {"title": "Group One", "authors": ["Author One"]})
+    runner.set_metadata(ids[1], {"title": "Group One", "authors": ["Author One"]})
+    runner.set_metadata(ids[2], {"title": "Group Two", "authors": ["Author Two"]})
+    runner.set_metadata(ids[3], {"title": "Group Two", "authors": ["Author Two"]})
+    facade = CalibreLibrary(_config_for(scratch_library))
+
+    stats = facade.library_stats()
+
+    groups = stats["data_quality_flags"]["duplicate_title_groups"]
+    titles = {g["key"]["title"] for g in groups}
+    assert titles == {"Group One", "Group Two"}
+    by_title = {g["key"]["title"]: {b["id"] for b in g["books"]} for g in groups}
+    assert by_title["Group One"] == {ids[0], ids[1]}
+    assert by_title["Group Two"] == {ids[2], ids[3]}
+
+
+@pytest.mark.integration
+def test_library_stats_touches_no_sqlite3_or_subprocess(facade: CalibreLibrary):
+    # AD-001: composing library_stats() must not reach for sqlite3/subprocess
+    # directly (mirrors the existing facade-wide invariant test).
+    facade.library_stats()
+
+    assert not hasattr(library_module, "sqlite3")
+    assert not hasattr(library_module, "subprocess")
 
 
 @pytest.mark.integration

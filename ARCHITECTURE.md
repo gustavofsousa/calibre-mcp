@@ -2,7 +2,8 @@
 
 How calibre-mcp is built, and why. The interesting parts for a portfolio read are
 [Safety mechanisms](#safety-mechanisms) and the [decision log](#decision-log) — they show the
-trade-offs behind an MCP server that's allowed to delete and email a user's files.
+trade-offs behind an MCP server that's allowed to delete and email a user's files. For what it does
+and who it's for, see [PRODUCT.md](PRODUCT.md).
 
 ## System overview
 
@@ -15,12 +16,16 @@ flowchart TD
         Facade["library.py<br/>CalibreLibrary facade<br/>plan→confirm orchestration, validation"]
         Reader["sqlite_reader.py<br/>SqliteReader — reads only<br/>metadata.db opened mode=ro"]
         Runners["calibredb_runner.py<br/>ebook_convert_runner.py<br/>calibre_smtp_runner.py<br/>subprocess, arg-list, shell=False"]
+        Scan["folder_scan.py<br/>pure filesystem discovery<br/>os.walk, followlinks=False"]
+        Merge["bulk_edit.py<br/>pure field-merge logic<br/>list_mode add/remove/replace"]
         Backup["backup.py<br/>snapshot + recoverable trash"]
         Confirm["confirmation.py<br/>plan→confirm token"]
 
         Server --> Facade
         Facade -- "reads" --> Reader
         Facade -- "writes" --> Runners
+        Facade -- "discovers files (import_folder)" --> Scan
+        Facade -- "merges fields (update_metadata_bulk)" --> Merge
         Facade -- "before every write" --> Backup
         Facade -- "gates mutations" --> Confirm
     end
@@ -28,12 +33,15 @@ flowchart TD
     Reader --> DB[("metadata.db")]
     Runners --> CLI["calibredb / ebook-convert / calibre-smtp"]
     CLI --> DB
+    Scan --> FS[("filesystem")]
 ```
 
 **The one invariant a reviewer checks first**: the tool layer (`server.py`) and the facade
-(`library.py`) never touch `sqlite3` or `subprocess` directly. Reads always go through
-`SqliteReader`; writes always go through a runner. Grep for `import sqlite3` / `import subprocess`
-outside `sqlite_reader.py` and the `*_runner.py` files as a quick audit.
+(`library.py`) never touch `sqlite3`, `subprocess`, or `os.walk` directly. Reads always go through
+`SqliteReader`; writes always go through a runner; recursive filesystem discovery always goes
+through `folder_scan.py` (AD-021 — a third named I/O kind alongside SQL and subprocess). Grep for
+`import sqlite3` / `import subprocess` / `os.walk` outside `sqlite_reader.py`, the `*_runner.py`
+files, and `folder_scan.py` as a quick audit.
 
 ## Why hybrid reads/writes
 
@@ -111,6 +119,32 @@ The token is `sha256("{op}|{book_id}|{sorted-json-payload}")[:16]` — not a sec
 between the plan and apply call recomputes to a different token and is refused
 (`hmac.compare_digest`, constant-time).
 
+## The bulk operation pattern
+
+`update_metadata_bulk`, `convert_book_bulk`, and `import_folder` all broadcast one operation to N
+books. Established by `BULK-01` and reused since (AD-020), the pattern always shapes the same way,
+independent of how many bulk tools get added later:
+
+```mermaid
+flowchart TD
+    A["Validate the whole batch first<br/>(bad field/target/id has no valid<br/>interpretation → fail fast)"] --> B{"Destructive or<br/>overwriting batch?"}
+    B -- "yes (update_metadata_bulk)" --> C["Gate on ONE batch<br/>confirmation_token<br/>(plan_token over sentinel id=0)"]
+    B -- "no — additive (convert_book_bulk,<br/>import_folder)" --> D["No token needed (AD-016)"]
+    C --> E["ONE metadata.db backup<br/>before the loop — the single<br/>rollback point (AD-011)"]
+    D --> E
+    E --> F["Process sorted(book_ids),<br/>best-effort, one book at a time"]
+    F --> G["Every book lands in exactly<br/>one named bucket —<br/>never a fake 'all succeeded'"]
+```
+
+Validating before backing up matters: a batch-level input error (an id that can never be valid, a
+target format that doesn't exist) aborts with **zero** side effects, never a partial write followed
+by a validation failure. Once past validation, a *per-book* failure is expected and handled —
+`sorted(book_ids)` keeps ordering deterministic for tests and for reading the result back. The
+bucket names are operation-specific (`applied`/`failed` for edits; `converted`/`skipped`/`failed`
+for convert, where `skipped` marks a benign no-op like "already has this format"; `added`/
+`duplicate`/`failed` for import) but the shape — every id accounted for, exactly once — never
+changes.
+
 ## Error taxonomy
 
 Every failure is a typed `CalibreMcpError` subclass (`errors.py`), mapped by `server.py`'s
@@ -152,6 +186,11 @@ The full, dated decision record (`AD-001` … `AD-019`) lives in
 - **AD-014 — one sibling runner per external CLI.** Adding a fourth external tool means adding a
   fourth small runner with the same shape (arg-list, `shell=False`, failure→taxonomy), not
   branching a shared one.
+- **AD-020 — the bulk operation pattern** (validate → single backup → best-effort loop → bucketed
+  result), detailed above under [The bulk operation pattern](#the-bulk-operation-pattern).
+- **AD-021 — filesystem discovery is its own pure module** (`folder_scan.py`), naming recursive
+  directory walking as a third I/O kind the facade orchestrates but never performs itself —
+  alongside SQL reads and subprocess writes.
 
 This file is the stable "how it's built and why" reference. `.specs/STATE.md` and
 `.specs/ROADMAP.md` are the living planning documents, updated per feature.
