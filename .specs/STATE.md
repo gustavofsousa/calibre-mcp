@@ -209,6 +209,21 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `applied` field). Tool: `enrich_missing` (sibling of `enrich_from_identifier`). One documented,
   intentional SPEC note: the residual "isbn present but normalizes to empty" negative folds into
   `no_record` (rare, guarded by the SQL `trim(val) != ''`).
+- **AD-028 — Library path has no single source of truth across the two consumers (ops debt).**
+  **Context:** the library moved on disk (`~/Documents/BibliotecaCalibre` →
+  `~/Documents/livros/biblioteca`) during a workspace reorg. Nothing in *this* repo broke — the
+  server correctly reads `CALIBRE_LIBRARY_PATH` (AD-007) — but the path is duplicated in **two
+  places the server doesn't own**: the Calibre GUI config (`~/.config/calibre/global.py.json:
+  library_path`) and the host's MCP env (`.claude.json: mcpServers.calibre.env`). Moving the
+  library means editing both by hand; a stale env fails fast at startup (`ConfigError`) rather than
+  silently, which is the intended safety, but the duplication is friction. **Decision:** accept the
+  duplication for now — a single-user, single-library tool (AD-007) doesn't justify a resolver, and
+  a config-discovery feature would reintroduce the very ambiguity AD-007 removed. **Debt tracked:**
+  if the library moves again and the double-edit bites, revisit — options are (a) a tiny
+  `calibre-mcp doctor` that prints/validates the resolved path so the host copies one value, or
+  (b) reading the GUI's `library_path` as a fallback when the env is unset. Neither is scheduled.
+  The operational contract (both files must agree) is documented host-side in
+  `~/projects/10_dotfiles/docs/livros-calibre.md`.
 
 ## Backlog — deferred (post-P2)
 
