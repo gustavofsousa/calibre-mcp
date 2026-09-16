@@ -12,8 +12,12 @@ SEARCH-02: list_books returns a page ordered by the requested field.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sqlite3
+import struct
+import subprocess
+import zlib
 from pathlib import Path
 
 import pytest
@@ -42,6 +46,68 @@ def _seed_book(
     )
     assert result.book_id is not None
     return result.book_id
+
+
+def _valid_cover_png(path: Path, width: int = 100, height: int = 150) -> Path:
+    """Write a real, multi-pixel PNG using only stdlib zlib/struct.
+
+    Calibre re-encodes any valid input image to ``cover.jpg`` on
+    ``set_metadata --field cover:``. A degenerate 1x1 PNG is rejected by Qt
+    ("Image is empty"), so this emits a real WxH white image.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data))
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    row = b"\x00" + b"\xff\xff\xff" * width  # filter byte + white pixels
+    idat = zlib.compress(row * height)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+    return path
+
+
+def _seed_empty_book(scratch_library: Path, title: str = "Empty") -> int:
+    # calibredb add --empty has no CalibredbRunner wrapper (adds no format /
+    # embedded cover) -- needed so an "uncovered" book is deterministic,
+    # since a real sample .epub's own embedded cover gets auto-extracted.
+    result = subprocess.run(
+        [
+            "calibredb",
+            "add",
+            "--empty",
+            "--title",
+            title,
+            "--with-library",
+            str(scratch_library),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    match = re.search(
+        r"Added book ids:\s*([\d,]+)", f"{result.stdout}\n{result.stderr}"
+    )
+    assert match is not None
+    return int(match.group(1).split(",")[0])
+
+
+def _seed_covered_book(scratch_library: Path, tmp_path: Path) -> int:
+    book_id = _seed_empty_book(scratch_library, "Covered")
+    cover_png = _valid_cover_png(tmp_path / "cover-source.png")
+    CalibredbRunner(scratch_library).set_metadata(book_id, {"cover": str(cover_png)})
+    return book_id
 
 
 @pytest.fixture
@@ -277,6 +343,63 @@ def test_format_files_missing_file_on_disk_raises_invalid_input(
 
     with pytest.raises(InvalidInputError) as excinfo:
         reader.format_files(book_id)
+
+    assert str(book_id) in str(excinfo.value)
+
+
+# ------------------------------------------------------------------- cover_file
+
+
+@pytest.mark.integration
+def test_cover_file_covered_book_returns_resolved_path(
+    scratch_library: Path, tmp_path: Path
+):
+    # RCOVER-01: has_cover=1 and cover.jpg present -> resolved Path, is_file() true.
+    book_id = _seed_covered_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    cover = reader.cover_file(book_id)
+
+    assert cover is not None
+    assert cover.is_file()
+    assert cover.name == "cover.jpg"
+
+
+@pytest.mark.integration
+def test_cover_file_uncovered_book_returns_none(scratch_library: Path):
+    # RCOVER-02: has_cover=0 -> None (a normal state, not an error). An empty
+    # book (no formats) guarantees no embedded cover was auto-extracted.
+    book_id = _seed_empty_book(scratch_library)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.cover_file(book_id) is None
+
+
+@pytest.mark.integration
+def test_cover_file_unknown_book_raises_not_found(scratch_library: Path):
+    # RCOVER-03: unknown id -> BookNotFoundError naming the id.
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    with pytest.raises(BookNotFoundError) as excinfo:
+        reader.cover_file(999999)
+
+    assert excinfo.value.book_id == 999999
+
+
+@pytest.mark.integration
+def test_cover_file_missing_on_disk_raises_invalid_input(
+    scratch_library: Path, tmp_path: Path
+):
+    # RCOVER-04: has_cover=1 but cover.jpg missing on disk -> InvalidInputError
+    # (metadata<->disk inconsistency), mirroring format_files -- never a
+    # silent "no cover" degrade.
+    book_id = _seed_covered_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+    book = reader.get_book(book_id)
+    (scratch_library / book.path / "cover.jpg").unlink()
+
+    with pytest.raises(InvalidInputError) as excinfo:
+        reader.cover_file(book_id)
 
     assert str(book_id) in str(excinfo.value)
 

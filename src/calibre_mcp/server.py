@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from .config import load_config
@@ -51,16 +51,19 @@ def _get_library() -> CalibreLibrary:
     return _library
 
 
-def _map_errors(fn: Callable[..., dict]) -> Callable[..., dict]:
+def _map_errors[T](fn: Callable[..., T]) -> Callable[..., T]:
     """Map every known failure to an explicit ``ToolError`` (design error table).
 
     Guarantees a failure is never returned as a silent wrong/empty result: each
     ``CalibreMcpError`` (config, not-found, invalid input, locked, calibredb,
     confirmation) surfaces as a clear tool error the host/LLM can act on.
+    Generic over the wrapped tool's return type (``dict`` for every existing
+    tool, ``Image | dict`` for ``read_cover``, AD-024) — a pure typing change,
+    behavior is unchanged: it only ever re-raises what ``fn`` returns/raises.
     """
 
     @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> dict:
+    def wrapper(*args: Any, **kwargs: Any) -> T:
         try:
             return fn(*args, **kwargs)
         except CalibreMcpError as exc:
@@ -150,6 +153,68 @@ def get_book(book_id: int) -> dict:
     (VIEW-02) — never an empty or misleading record.
     """
     return _book_to_dict(_get_library().get_book(book_id))
+
+
+@mcp.tool()
+@_map_errors
+def read_cover(book_id: int) -> Any:
+    """Return a book's cover as viewable image content (RCOVER-01..05).
+
+    A book with a cover returns the cover itself as viewable image content
+    (``image/jpeg``) so the host can actually see it -- not just a path. A book
+    with no cover returns ``{book_id, has_cover: false, cover_path: null}`` --
+    not an error. An unknown id raises a "book not found" error; a book whose
+    metadata claims a cover but whose ``cover.jpg`` is missing on disk raises
+    invalid input (a real metadata<->disk inconsistency), mirroring
+    ``format_files`` rather than a silent "no cover" degrade. Pure read: no
+    write, no ``calibredb`` call, no network.
+    """
+    # SPEC_DEVIATION: design.md specifies `-> Image | dict` as the return
+    # annotation. With the installed mcp SDK (1.28.1) that crashes tool
+    # *registration*: building the union's structured-output schema calls
+    # pydantic's create_model() unconditionally (even for
+    # structured_output=False) and pydantic has no schema for Image.
+    # Reason: `-> Any` produces the identical runtime wire behavior --
+    # FastMCP's content conversion dispatches on the actual returned value's
+    # type, not the static annotation, and output_schema is None either way
+    # (verified) -- while avoiding the crash.
+    result = _get_library().read_cover(book_id)
+    return Image(path=result["cover_path"]) if result["has_cover"] else result
+
+
+@mcp.tool()
+@_map_errors
+def set_cover(
+    book_id: int,
+    image_path: str,
+    confirmation_token: str | None = None,
+) -> dict:
+    """Set a book's cover from a LOCAL image file, two-step plan->confirm
+    (COVER-02, SCOVER-01..07).
+
+    HOST: surface the returned plan (whether the book currently has a cover --
+    replace vs add -- and the resolved image path) to the USER and only
+    re-call with ``confirmation_token`` after they approve.
+
+    ``image_path`` must be a LOCAL filesystem path to an existing image file
+    (.jpg/.jpeg/.png/.webp/.gif/.bmp) -- not a URL, not raw image bytes.
+    Without a token: nothing is written; validates the book exists and the
+    image file is valid, then returns ``current_has_cover`` (true means this
+    call will REPLACE the existing cover, not add a new one) plus a
+    deterministic ``confirmation_token``. A missing/unreadable path or an
+    unsupported extension is rejected here, before any backup -- calibredb
+    would otherwise silently do nothing on a bad path.
+
+    With a matching token: backs up ``metadata.db`` once, sets the cover via
+    ``calibredb set_metadata``, then RE-READS the book's cover state and
+    returns ``has_cover`` + ``cover_path`` -- the change is demonstrated, not
+    just assumed, so a write calibredb could not actually apply surfaces
+    truthfully rather than as a fake success. A mismatched token is refused
+    before any write.
+    """
+    return _jsonify(
+        _get_library().set_cover(book_id, image_path, token=confirmation_token)
+    )
 
 
 @mcp.tool()
@@ -485,6 +550,43 @@ def find_duplicates() -> dict:
     returns an empty group set, not an error.
     """
     return _get_library().find_duplicates()
+
+
+@mcp.tool()
+@_map_errors
+def enrich_from_identifier(book_id: int) -> dict:
+    """Propose gap-filling metadata for a book from its ISBN — READ-ONLY (ENRICH-01).
+
+    Makes one outbound call to Open Library keyed on the book's ISBN and returns
+    values ONLY for the fields the book currently lacks (comments/publisher/
+    pubdate), plus a downloaded cover ``local_path`` when the book has no cover.
+    Writes NOTHING to the library: it PROPOSES, it does not apply. To apply, feed
+    ``proposed`` into ``update_metadata`` and the cover ``local_path`` into
+    ``set_cover``. A book with no ISBN, or one Open Library has no record for,
+    returns ``{found: false, reason}`` (a normal result, not an error); when the
+    source is offline/unreachable the tool fails with a clear error.
+    """
+    return _jsonify(_get_library().enrich_from_identifier(book_id))
+
+
+@mcp.tool()
+@_map_errors
+def enrich_missing(limit: int | None = None, offset: int = 0) -> dict:
+    """Batch review: propose gap-filling metadata for incomplete books (ENRICH-03).
+
+    Selects the books that carry an ISBN AND are still missing an enrichable
+    field (comments/publisher/pubdate), looks each up via the same Open Library
+    path as ``enrich_from_identifier``, and returns ONE advisory proposal per
+    book plus a bucketed ``summary``. Writes NOTHING and NEVER bulk-applies: the
+    ``results`` are proposals to walk. HOST: for each ``status:"proposed"`` item,
+    apply it per book through the ENRICH-02 chain — feed ``proposed`` into
+    ``update_metadata`` and any ``cover.local_path`` into ``set_cover`` — after
+    the USER approves that book. Bounded: at most ``limit`` candidates (default
+    25, ceiling 100); ``offset`` pages the rest; ``candidate_count`` vs
+    ``processed`` tells you if more remain. A single book's source failure
+    becomes that item's ``status:"error"`` and never aborts the sweep.
+    """
+    return _jsonify(_get_library().enrich_missing(limit=limit, offset=offset))
 
 
 @mcp.tool()

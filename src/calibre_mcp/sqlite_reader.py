@@ -194,6 +194,42 @@ class SqliteReader:
             conn.close()
         return [r["book"] for r in rows]
 
+    def enrichable_candidates(
+        self, limit: int, offset: int
+    ) -> tuple[int, list[int]]:
+        """Return ``(total_count, page_ids)`` of the enrichment candidates (ENRICH3-01).
+
+        A candidate carries a non-blank ``isbn`` identifier (so an Open Library
+        lookup is possible at all) AND is missing at least one enrichable field:
+        ``comments`` (no non-blank row), ``publisher`` (no ``books_publishers_link``
+        row), or ``pubdate`` (NULL or the ``0101-01-01%`` placeholder). These are
+        the SAME "missing" rules ``_stats_completeness`` uses — one business rule,
+        no drift. ``total_count`` is every matching book (for the host to tell more
+        remain); ``page_ids`` is the ``id``-ordered ``LIMIT``/``OFFSET`` window.
+        """
+        where = (
+            "WHERE EXISTS (SELECT 1 FROM identifiers i "
+            "WHERE i.book = b.id AND i.type = 'isbn' AND trim(i.val) != '') "
+            "AND ("
+            "NOT EXISTS (SELECT 1 FROM comments c "
+            "WHERE c.book = b.id AND trim(c.text) != '') "
+            "OR NOT EXISTS "
+            "(SELECT 1 FROM books_publishers_link p WHERE p.book = b.id) "
+            "OR b.pubdate IS NULL OR b.pubdate LIKE '0101-01-01%')"
+        )
+        conn = self._connect()
+        try:
+            total = conn.execute(
+                f"SELECT COUNT(*) AS n FROM books b {where}"
+            ).fetchone()["n"]
+            rows = conn.execute(
+                f"SELECT b.id FROM books b {where} ORDER BY b.id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        finally:
+            conn.close()
+        return int(total), [r["id"] for r in rows]
+
     @staticmethod
     def _require_int(book_id: int) -> None:
         if not isinstance(book_id, int) or isinstance(book_id, bool):
@@ -339,6 +375,38 @@ class SqliteReader:
                 )
             files[row["format"]] = file_path
         return files
+
+    def cover_file(self, book_id: int) -> Path | None:
+        """Resolve a book's on-disk ``cover.jpg`` path, keyed on
+        ``books.has_cover`` (RCOVER-01..04). Cover-scoped sibling of
+        ``format_files``.
+
+        ``has_cover`` falsy -> ``None`` (no cover, a normal state). Unknown
+        id -> ``BookNotFoundError``. ``has_cover`` true but ``cover.jpg``
+        missing on disk -> ``InvalidInputError`` (metadata<->disk
+        inconsistency), mirroring ``format_files`` rather than silently
+        degrading to "no cover".
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT path, has_cover FROM books WHERE id = ?", (book_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            raise BookNotFoundError(book_id)
+        if not row["has_cover"]:
+            return None
+
+        book_path: str = row["path"]
+        cover = self._library_path / book_path / "cover.jpg"
+        if not cover.is_file():
+            raise InvalidInputError(
+                f"cover file for book {book_id} not found on disk: {cover}"
+            )
+        return cover
 
     def library_stats(self) -> LibraryStats:
         """Compute the aggregate baseline profile of the library (STATS-01).
