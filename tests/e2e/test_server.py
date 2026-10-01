@@ -18,6 +18,9 @@ Coverage:
   VIEW-01    get_book returns the full record.
   VIEW-02    an unknown id surfaces a clear "not found" tool error.
   VIEW-03    a non-integer id is rejected at the boundary (before DB access).
+  RCOVER-01  read_cover returns viewable image content for a covered book.
+  RCOVER-02  read_cover returns structured {has_cover: False} for no cover.
+  RCOVER-03  read_cover unknown id surfaces a clear tool error.
   EDIT-01    update_metadata without a token returns a diff + token, no write.
   EDIT-02    update_metadata with a matching token applies and re-reads.
   EDIT-04    an out-of-whitelist field surfaces an explicit tool error.
@@ -39,13 +42,18 @@ import asyncio
 import contextlib
 import io
 import json
+import re
 import shutil
 import stat
+import struct
+import subprocess
+import zlib
 from pathlib import Path
 from typing import Any
 
 import pytest
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
+from mcp.types import ImageContent
 
 from calibre_mcp import server
 from calibre_mcp.calibre_smtp_runner import CalibreSmtpRunner
@@ -56,15 +64,76 @@ from calibre_mcp.config import (
     SMTP_RELAY_ENV,
     SMTP_USERNAME_ENV,
 )
+from calibre_mcp.errors import EnrichmentSourceError
+from calibre_mcp.openlibrary_client import OpenLibraryRecord
+from sample_books import sample_epub_sources
 
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+
+def _valid_cover_png(path: Path, width: int = 100, height: int = 150) -> Path:
+    """Write a real, multi-pixel PNG using only stdlib zlib/struct.
+
+    Calibre re-encodes any valid input image to ``cover.jpg`` on
+    ``set_metadata --field cover:``. A degenerate 1x1 PNG is rejected by Qt
+    ("Image is empty"), so this emits a real WxH white image.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data))
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    row = b"\x00" + b"\xff\xff\xff" * width  # filter byte + white pixels
+    idat = zlib.compress(row * height)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+    return path
+
+
+def _seed_empty_book(library_path: Path, title: str = "Empty") -> int:
+    # calibredb add --empty has no CalibredbRunner wrapper (adds no format /
+    # embedded cover) -- needed so an "uncovered" book is deterministic, since
+    # a real sample .epub's own embedded cover gets auto-extracted.
+    result = subprocess.run(
+        [
+            "calibredb",
+            "add",
+            "--empty",
+            "--title",
+            title,
+            "--with-library",
+            str(library_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    match = re.search(
+        r"Added book ids:\s*([\d,]+)", f"{result.stdout}\n{result.stderr}"
+    )
+    assert match is not None
+    return int(match.group(1).split(",")[0])
+
+
+def _seed_covered_book(library_path: Path, tmp_path: Path) -> int:
+    book_id = _seed_empty_book(library_path, "Covered")
+    cover_png = _valid_cover_png(tmp_path / "cover-source.png")
+    CalibredbRunner(library_path).set_metadata(book_id, {"cover": str(cover_png)})
+    return book_id
 
 
 def _sample_epub(tmp_path: Path, name: str = "sample.epub") -> Path:
-    """Copy one real .epub into a temp path (reading the real library is safe)."""
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if not sources:
-        pytest.skip("no sample .epub available in the real library")
+    """Copy one synthetic sample .epub into a temp path."""
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[0], dest)
     return dest
@@ -74,6 +143,12 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     """Invoke a registered tool in-process and parse its JSON result payload."""
     result = asyncio.run(server.mcp.call_tool(name, arguments))
     return json.loads(result[0].text)
+
+
+def _call_raw(name: str, arguments: dict[str, Any]) -> Any:
+    """Invoke a registered tool in-process, returning the raw content blocks
+    (for a tool whose result may not be JSON text, e.g. image content)."""
+    return asyncio.run(server.mcp.call_tool(name, arguments))
 
 
 def _read_resource(uri: str) -> Any:
@@ -175,6 +250,87 @@ def test_get_book_non_integer_id_rejected_at_boundary(env: Path):
     assert "integer" in str(excinfo.value).lower()
 
 
+# -------------------------------------------------------------------- COVER
+
+
+@pytest.mark.e2e
+def test_read_cover_covered_book_returns_viewable_image_content(
+    env: Path, tmp_path: Path
+):
+    # RCOVER-01: a cover present -> image content, MIME image/jpeg, non-empty.
+    book_id = _seed_covered_book(env, tmp_path)
+
+    content = _call_raw("read_cover", {"book_id": book_id})
+
+    assert len(content) == 1
+    assert isinstance(content[0], ImageContent)
+    assert content[0].mimeType == "image/jpeg"
+    assert content[0].data
+
+
+@pytest.mark.e2e
+def test_read_cover_uncovered_book_returns_structured_no_cover(env: Path):
+    # RCOVER-02: no cover -> structured {has_cover: False}, not an error/image.
+    book_id = _seed_empty_book(env)
+
+    payload = _call("read_cover", {"book_id": book_id})
+
+    assert payload == {"book_id": book_id, "has_cover": False, "cover_path": None}
+
+
+@pytest.mark.e2e
+def test_read_cover_unknown_id_is_tool_error(env: Path):
+    # RCOVER-03: an unknown id -> clear "not found" tool error naming the id.
+    with pytest.raises(ToolError) as excinfo:
+        _call("read_cover", {"book_id": 999999})
+
+    assert "999999" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_set_cover_plan_then_apply_round_trip(env: Path, tmp_path: Path):
+    # SCOVER-01/05: plan (no token) -> current_has_cover False + token, no
+    # write; apply (token) -> has_cover flips True with a cover_path, and a
+    # fresh get_book/read_cover confirms the change persisted.
+    book_id = _seed_empty_book(env)
+    image = _valid_cover_png(tmp_path / "cover.png")
+
+    plan = _call("set_cover", {"book_id": book_id, "image_path": str(image)})
+    assert plan["status"] == "plan"
+    assert plan["current_has_cover"] is False
+    assert plan["confirmation_token"]
+
+    applied = _call(
+        "set_cover",
+        {
+            "book_id": book_id,
+            "image_path": str(image),
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+
+    assert applied["status"] == "applied"
+    assert applied["has_cover"] is True
+    assert applied["cover_path"] and Path(applied["cover_path"]).name == "cover.jpg"
+    # independent round trip through the read side of the tool surface
+    # (RCOVER-01): a covered book returns viewable image content, not JSON.
+    content = _call_raw("read_cover", {"book_id": book_id})
+    assert len(content) == 1
+    assert isinstance(content[0], ImageContent)
+    assert content[0].mimeType == "image/jpeg"
+
+
+@pytest.mark.e2e
+def test_set_cover_missing_path_is_tool_error(env: Path, tmp_path: Path):
+    # SCOVER-02: a nonexistent image_path is a clear tool error, not a silent
+    # no-op -- calibredb itself would silently ignore a bad path.
+    book_id = _seed_empty_book(env)
+    missing = tmp_path / "does-not-exist.png"
+
+    with pytest.raises(ToolError):
+        _call("set_cover", {"book_id": book_id, "image_path": str(missing)})
+
+
 # --------------------------------------------------------------------- EDIT
 
 
@@ -233,9 +389,7 @@ def test_update_metadata_invalid_field_is_tool_error(seeded: int):
 def two_seeded(env: Path, tmp_path: Path) -> list[int]:
     """Seed two DISTINCT books (different source files) and return their ids."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "one.epub")
     shutil.copy2(sources[1], tmp_path / "two.epub")
     id1 = runner.add(tmp_path / "one.epub").book_id
@@ -362,9 +516,7 @@ def test_stdout_stays_clean_across_bulk_edit_calls(two_seeded: list[int]):
 def author_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed two books: one credited to 'Old Name', one to 'Someone Else'."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "old.epub")
     shutil.copy2(sources[1], tmp_path / "other.epub")
     old_id = runner.add(tmp_path / "old.epub").book_id
@@ -423,9 +575,7 @@ def test_rename_author_not_found_is_tool_error(env: Path):
 def tag_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed two books: one tagged 'old-tag', one tagged 'other-tag'."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "old.epub")
     shutil.copy2(sources[1], tmp_path / "other.epub")
     old_id = runner.add(tmp_path / "old.epub").book_id
@@ -479,9 +629,7 @@ def test_rename_tag_not_found_is_tool_error(env: Path):
 def series_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed two books: one in series 'Old' (index 7.5), one in 'Other'."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "old.epub")
     shutil.copy2(sources[1], tmp_path / "other.epub")
     old_id = runner.add(tmp_path / "old.epub").book_id
@@ -672,9 +820,7 @@ def test_remove_book_description_states_recoverable_two_step():
 def merge_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed a survivor (EPUB only) and a loser (EPUB + PDF), distinct files."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "survivor.epub")
     shutil.copy2(sources[1], tmp_path / "loser.epub")
     survivor_id = runner.add(tmp_path / "survivor.epub").book_id
@@ -906,7 +1052,7 @@ def test_find_duplicates_returns_groups(env: Path, tmp_path: Path):
     # ORG-01 AC-1: two same-title/same-author books -> one group of 2.
     runner = CalibredbRunner(env)
     id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
-    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    shutil.copy2(sample_epub_sources()[1], tmp_path / "two.epub")
     id2 = runner.add(tmp_path / "two.epub").book_id
     runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
     runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
@@ -1048,7 +1194,7 @@ def test_library_stats_resource_returns_well_formed_profile(
     # well-formed and the known duplicate group is present.
     runner = CalibredbRunner(env)
     id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
-    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    shutil.copy2(sample_epub_sources()[1], tmp_path / "two.epub")
     id2 = runner.add(tmp_path / "two.epub").book_id
     runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
     runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
@@ -1098,3 +1244,130 @@ def test_library_stats_resource_stdout_stays_clean(seeded: int):
         _read_resource("calibre://library/stats")
 
     assert buffer.getvalue() == ""
+
+
+# ------------------------------------------------------------ ENRICH-01 (LOOKUP)
+
+
+class _EnrichFake:
+    """A no-network enricher for the tool surface: returns a record or raises."""
+
+    def __init__(
+        self,
+        record: OpenLibraryRecord | None,
+        *,
+        fetch_error: Exception | None = None,
+    ) -> None:
+        self._record = record
+        self._fetch_error = fetch_error
+
+    def fetch_record(self, isbn: str) -> OpenLibraryRecord | None:
+        if self._fetch_error is not None:
+            raise self._fetch_error
+        return self._record
+
+    def download_cover(self, cover_url: str, dest_dir: Path | None = None) -> Path:
+        raise AssertionError("cover download is not exercised by these e2e tests")
+
+
+def _seed_isbn_book(library_path: Path) -> int:
+    book_id = _seed_empty_book(library_path, "Enrich")
+    CalibredbRunner(library_path).set_metadata(
+        book_id, {"identifiers": "isbn:978-0-553-29335-7"}
+    )
+    return book_id
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_returns_found_true_payload(env: Path):
+    # LOOKUP-01: the tool returns the advisory found:true JSON payload, gap-only.
+    book_id = _seed_isbn_book(env)
+    server._get_library()._enricher = _EnrichFake(
+        OpenLibraryRecord("Bantam", "April 2009", "A space opera.", None)
+    )
+
+    result = _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert result["found"] is True
+    assert result["source"] == "openlibrary"
+    assert result["identifier_used"] == {"type": "isbn", "value": "9780553293357"}
+    assert result["proposed"] == {
+        "comments": "A space opera.",
+        "publisher": "Bantam",
+        "pubdate": "April 2009",
+    }
+    assert result["cover"] is None
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_found_false_is_normal_json_not_error(env: Path):
+    # LOOKUP-02: a book with no ISBN surfaces found:false as normal JSON, not an error.
+    book_id = _seed_empty_book(env, "NoIsbn")
+    server._get_library()._enricher = _EnrichFake(
+        OpenLibraryRecord("X", "Y", "Z", None)
+    )
+
+    result = _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no usable identifier (ISBN)",
+    }
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_source_error_maps_to_tool_error(env: Path):
+    # LOOKUP-08: an EnrichmentSourceError from the facade maps to a clean ToolError.
+    book_id = _seed_isbn_book(env)
+    server._get_library()._enricher = _EnrichFake(
+        None, fetch_error=EnrichmentSourceError("source offline")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert "source offline" in str(excinfo.value)
+
+
+@pytest.mark.e2e
+def test_enrich_missing_returns_batch_proposals_as_json(env: Path):
+    # ENRICH3-01/02: the batch tool returns a proposal per candidate + a summary.
+    first = _seed_isbn_book(env)
+    second = _seed_empty_book(env, "Second")
+    CalibredbRunner(env).set_metadata(second, {"identifiers": "isbn:9780000000002"})
+    server._get_library()._enricher = _EnrichFake(
+        OpenLibraryRecord("Bantam", "2009", "A space opera.", None)
+    )
+
+    result = _call("enrich_missing", {})
+
+    assert result["candidate_count"] == 2
+    assert result["processed"] == 2
+    assert result["summary"] == {
+        "proposed": 2, "no_new_data": 0, "no_record": 0, "error": 0
+    }
+    assert {r["book_id"] for r in result["results"]} == {first, second}
+    assert all(r["status"] == "proposed" for r in result["results"])
+
+
+@pytest.mark.e2e
+def test_enrich_missing_isolates_source_error_as_json_status_not_tool_error(env: Path):
+    # ENRICH3-04: a per-book source failure is a JSON status:error, NOT a ToolError.
+    book_id = _seed_isbn_book(env)
+    server._get_library()._enricher = _EnrichFake(
+        None, fetch_error=EnrichmentSourceError("source offline")
+    )
+
+    result = _call("enrich_missing", {})  # does NOT raise
+
+    assert result["summary"]["error"] == 1
+    assert result["results"][0]["book_id"] == book_id
+    assert result["results"][0]["status"] == "error"
+
+
+@pytest.mark.e2e
+def test_enrich_missing_bad_bound_maps_to_tool_error(env: Path):
+    # ENRICH3-08: an invalid bound surfaces as a clean ToolError.
+    with pytest.raises(ToolError):
+        _call("enrich_missing", {"limit": 0})

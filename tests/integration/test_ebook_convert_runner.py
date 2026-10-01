@@ -17,14 +17,11 @@ import pytest
 
 from calibre_mcp.ebook_convert_runner import EbookConvertRunner
 from calibre_mcp.errors import EbookConvertError, EbookConvertNotFoundError
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path) -> Path:
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if not sources:
-        pytest.skip("no sample .epub available in the real library")
+    sources = sample_epub_sources()
     smallest = min(sources, key=lambda p: p.stat().st_size)
     dest = tmp_path / "sample.epub"
     shutil.copy2(smallest, dest)

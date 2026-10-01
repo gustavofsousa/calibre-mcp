@@ -12,8 +12,12 @@ SEARCH-02: list_books returns a page ordered by the requested field.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sqlite3
+import struct
+import subprocess
+import zlib
 from pathlib import Path
 
 import pytest
@@ -21,14 +25,11 @@ import pytest
 from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.errors import BookNotFoundError, InvalidInputError
 from calibre_mcp.sqlite_reader import Book, LibraryStats, SqliteReader
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path, name: str = "sample.epub", index: int = 0) -> Path:
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) <= index:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[index], dest)
     return dest
@@ -42,6 +43,68 @@ def _seed_book(
     )
     assert result.book_id is not None
     return result.book_id
+
+
+def _valid_cover_png(path: Path, width: int = 100, height: int = 150) -> Path:
+    """Write a real, multi-pixel PNG using only stdlib zlib/struct.
+
+    Calibre re-encodes any valid input image to ``cover.jpg`` on
+    ``set_metadata --field cover:``. A degenerate 1x1 PNG is rejected by Qt
+    ("Image is empty"), so this emits a real WxH white image.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data))
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    row = b"\x00" + b"\xff\xff\xff" * width  # filter byte + white pixels
+    idat = zlib.compress(row * height)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", idat)
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+    return path
+
+
+def _seed_empty_book(scratch_library: Path, title: str = "Empty") -> int:
+    # calibredb add --empty has no CalibredbRunner wrapper (adds no format /
+    # embedded cover) -- needed so an "uncovered" book is deterministic,
+    # since a real sample .epub's own embedded cover gets auto-extracted.
+    result = subprocess.run(
+        [
+            "calibredb",
+            "add",
+            "--empty",
+            "--title",
+            title,
+            "--with-library",
+            str(scratch_library),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    match = re.search(
+        r"Added book ids:\s*([\d,]+)", f"{result.stdout}\n{result.stderr}"
+    )
+    assert match is not None
+    return int(match.group(1).split(",")[0])
+
+
+def _seed_covered_book(scratch_library: Path, tmp_path: Path) -> int:
+    book_id = _seed_empty_book(scratch_library, "Covered")
+    cover_png = _valid_cover_png(tmp_path / "cover-source.png")
+    CalibredbRunner(scratch_library).set_metadata(book_id, {"cover": str(cover_png)})
+    return book_id
 
 
 @pytest.fixture
@@ -281,6 +344,63 @@ def test_format_files_missing_file_on_disk_raises_invalid_input(
     assert str(book_id) in str(excinfo.value)
 
 
+# ------------------------------------------------------------------- cover_file
+
+
+@pytest.mark.integration
+def test_cover_file_covered_book_returns_resolved_path(
+    scratch_library: Path, tmp_path: Path
+):
+    # RCOVER-01: has_cover=1 and cover.jpg present -> resolved Path, is_file() true.
+    book_id = _seed_covered_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    cover = reader.cover_file(book_id)
+
+    assert cover is not None
+    assert cover.is_file()
+    assert cover.name == "cover.jpg"
+
+
+@pytest.mark.integration
+def test_cover_file_uncovered_book_returns_none(scratch_library: Path):
+    # RCOVER-02: has_cover=0 -> None (a normal state, not an error). An empty
+    # book (no formats) guarantees no embedded cover was auto-extracted.
+    book_id = _seed_empty_book(scratch_library)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    assert reader.cover_file(book_id) is None
+
+
+@pytest.mark.integration
+def test_cover_file_unknown_book_raises_not_found(scratch_library: Path):
+    # RCOVER-03: unknown id -> BookNotFoundError naming the id.
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    with pytest.raises(BookNotFoundError) as excinfo:
+        reader.cover_file(999999)
+
+    assert excinfo.value.book_id == 999999
+
+
+@pytest.mark.integration
+def test_cover_file_missing_on_disk_raises_invalid_input(
+    scratch_library: Path, tmp_path: Path
+):
+    # RCOVER-04: has_cover=1 but cover.jpg missing on disk -> InvalidInputError
+    # (metadata<->disk inconsistency), mirroring format_files -- never a
+    # silent "no cover" degrade.
+    book_id = _seed_covered_book(scratch_library, tmp_path)
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+    book = reader.get_book(book_id)
+    (scratch_library / book.path / "cover.jpg").unlink()
+
+    with pytest.raises(InvalidInputError) as excinfo:
+        reader.cover_file(book_id)
+
+    assert str(book_id) in str(excinfo.value)
+
+
 # ---------------------------------------------------------- find_duplicate_groups
 
 
@@ -359,21 +479,26 @@ def test_library_stats_returns_every_ac1_sub_object(reader: SqliteReader):
 
 @pytest.mark.integration
 def test_library_stats_grounded_facts_against_real_library(reader: SqliteReader):
-    # STATS-01-01/02: grounded facts confirmed directly against metadata.db
-    # (170 books, ids 1-185, 64 placeholder pubdates, 14 Unknown-author books).
+    # STATS-01-01/02: grounded facts, asserted as invariants that hold for any
+    # library state rather than pinned to one snapshot's counts (which broke the
+    # moment the library grew past the 170 books it was written against).
     stats = reader.library_stats()
+    books = stats.totals["books"]
 
-    assert stats.totals["books"] == reader.count_books()
+    assert books == reader.count_books()
     assert stats.totals["max_id"] + 1 == stats.totals["next_id_hint"]
-    assert stats.data_quality["placeholder_pubdate_0101"] == 64
-    assert stats.data_quality["unknown_author_books"] == 14
-    assert stats.metadata_completeness["comments"]["filled"] == 49
+    assert 0 <= stats.data_quality["unknown_author_books"] <= books
+    assert 0 <= stats.metadata_completeness["comments"]["filled"] <= books
     # Edge case: real (non-placeholder) pubdates are mutually exclusive with
-    # placeholder_pubdate_0101 and counted separately (170 - 64 = 106).
-    assert stats.metadata_completeness["real_pubdate"]["filled"] == 106
+    # placeholder_pubdate_0101 and together cover every book.
+    assert (
+        stats.metadata_completeness["real_pubdate"]["filled"]
+        + stats.data_quality["placeholder_pubdate_0101"]
+        == books
+    )
     # Edge case: books with no language recorded land in an explicit "unset"
     # bucket rather than being silently dropped from the total.
-    assert stats.languages["unset"] == 91
+    assert "unset" in stats.languages
     assert sum(stats.languages.values()) == stats.totals["books"]
 
 
@@ -391,8 +516,8 @@ def test_library_stats_pct_guarded_and_tie_breakers_deterministic(
     assert len(stats.tags["top"]) <= 10
     author_counts = [entry["count"] for entry in stats.authors["top"]]
     assert author_counts == sorted(author_counts, reverse=True)
-    # STATS-01-01 grounded: "Eiichirô Oda" (20 books) is the top author.
-    assert stats.authors["top"][0] == {"name": "Eiichirô Oda", "count": 20}
+    tied_at_top = [e for e in stats.authors["top"] if e["count"] == author_counts[0]]
+    assert tied_at_top == sorted(tied_at_top, key=lambda e: e["name"])
 
 
 @pytest.mark.integration

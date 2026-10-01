@@ -27,17 +27,14 @@ from calibre_mcp import library as library_module
 from calibre_mcp.config import Config
 from calibre_mcp.errors import CalibredbError, InvalidInputError
 from calibre_mcp.library import CalibreLibrary
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path, name: str, index: int = 0) -> Path:
     # ``index`` picks a distinct source file so seeded books are never
     # byte-identical unless the test wants that (calibredb flags a
     # byte-identical add as a duplicate).
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) <= index:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     dest = tmp_path / name
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(sources[index], dest)

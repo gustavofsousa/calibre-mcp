@@ -26,6 +26,9 @@ uv run pytest                 # full suite — must be green
 
 CI runs the same three commands on every push/PR; a red CI run blocks merge.
 
+Optional, read-only, against your own library: `CALIBRE_MCP_TEST_REAL_LIBRARY=/path/to/library
+uv run pytest`. Before a release, run the manual [live smoke test](docs/live-smoke-test.md).
+
 ## Invariants a PR must not break
 
 These are load-bearing, not style preferences — read
@@ -49,7 +52,11 @@ These are load-bearing, not style preferences — read
 - **Logging is stderr-only.** Stdout is the MCP stdio framing channel; nothing but MCP frames may
   be written there.
 - **Write tests never touch a real Calibre library.** Bootstrap a scratch library via the
-  `scratch_library` fixture in `tests/conftest.py`. This is the one rule with zero exceptions.
+  `scratch_library` fixture in `tests/conftest.py` and seed it with `sample_epub_sources()` from
+  `tests/sample_books.py` — never with files copied from a personal library path. This is the one
+  rule with zero exceptions.
+- **A test must not skip silently.** Skip reasons print by default (`-rs`); a new skip needs a
+  reason that holds in CI too.
 
 ## Code style
 
@@ -68,7 +75,8 @@ These are load-bearing, not style preferences — read
 
 Non-trivial features follow a lightweight spec-driven process: **Specify → Design → Tasks →
 Execute**, tracked under `.specs/`. `.specs/STATE.md` holds the dated decision log (`AD-NNN`) and
-current project status; `.specs/ROADMAP.md` holds the phased backlog. Skim both before proposing a
+current project status; [`ROADMAP.md`](ROADMAP.md) holds the versioned delivery plan and
+[`BACKLOG.md`](BACKLOG.md) the unsequenced ideas. Skim them before proposing a
 larger change so you're building on the same assumptions the rest of the codebase does. For
 anything beyond a small fix, open an issue first so we can align on approach before you invest
 time in an implementation.

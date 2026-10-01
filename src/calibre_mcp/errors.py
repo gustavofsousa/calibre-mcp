@@ -100,6 +100,22 @@ class CalibreSmtpNotFoundError(CalibreMcpError):
         super().__init__("calibre-smtp not installed or not on PATH")
 
 
+class EnrichmentSourceError(CalibreMcpError):
+    """An outbound enrichment source (e.g. Open Library) failed (ENRICH-01).
+
+    Raised when the external source is unreachable, times out, returns an HTTP
+    error (>=400 other than a clean not-found), or sends an unparseable body.
+    Carries a short human-readable reason and, optionally, the URL that failed
+    (never any secret — these requests carry none).
+    """
+
+    def __init__(self, reason: str, url: str | None = None) -> None:
+        self.reason = reason
+        self.url = url
+        detail = reason if url is None else f"{reason} ({url})"
+        super().__init__(f"enrichment source failed: {detail}")
+
+
 class SmtpNotConfiguredError(ConfigError):
     """A required CALIBRE_MCP_SMTP_* environment variable is unset."""
 

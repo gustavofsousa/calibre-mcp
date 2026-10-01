@@ -3,7 +3,7 @@
   "promote_threshold": 2,
   "window_days": 45,
   "quarantine_threshold": 2,
-  "next_id": 8,
+  "next_id": 9,
   "lessons": [
     {
       "id": "L-001",
@@ -130,6 +130,24 @@
       ],
       "created": "2026-07-31T02:53:00Z",
       "last_seen": "2026-07-31T02:53:00Z"
+    },
+    {
+      "id": "L-008",
+      "key": "spec_deviation::annotate a fastmcp tool that returns mcp image content as any not a real image dict union the union crashes tool registration under mcp sdk 1 28 1 pydantic create model has no schema for image runtime wire behavior is identical since fastmcp dispatches on the returned value s type",
+      "text": "Annotate a FastMCP tool that returns MCP Image content as -> Any, not a real Image|dict union: the union crashes tool registration under mcp SDK 1.28.1 (pydantic create_model has no schema for Image); runtime wire behavior is identical since FastMCP dispatches on the returned value's type",
+      "signal": "spec_deviation",
+      "scope": "src/calibre_mcp/server.py",
+      "status": "candidate",
+      "features": [
+        "cover-read"
+      ],
+      "recurrence": 1,
+      "harmful": 0,
+      "evidence": [
+        ".specs/features/cover-read/validation.md (SPEC_DEVIATION: read_cover -> Any); src/calibre_mcp/server.py read_cover (src/calibre_mcp/server.py)"
+      ],
+      "created": "2026-07-31T23:36:39Z",
+      "last_seen": "2026-07-31T23:36:39Z"
     }
   ]
 }

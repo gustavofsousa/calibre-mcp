@@ -168,12 +168,21 @@ Three pytest markers: **`unit`** (pure functions, temp dirs, no Calibre needed),
 **`e2e`** (drives the actual `FastMCP` tool surface).
 
 **Non-negotiable rule**: write tests never touch the maintainer's real library — every mutating
-test bootstraps a disposable scratch library first (`tests/conftest.py`). CI installs Calibre
-specifically so the write-path tests run for real, not skipped.
+test bootstraps a disposable scratch library first (`tests/conftest.py`) and seeds it with
+**synthetic** sample books built by `ebook-convert` (`tests/sample_books.py`). CI installs Calibre so
+the write-path tests run for real, not skipped; `pytest -rs` is on by default so a skip can never
+hide behind a green run again (AD-029 — until then the samples were copied from a hard-coded
+personal path, and ~180 tests skipped silently in CI and after the library moved).
+
+Two layers sit on top of the per-tool contracts: `tests/e2e/test_curation_journey.py` chains every
+write tool the way a host drives a session, and [`docs/live-smoke-test.md`](docs/live-smoke-test.md)
+is the manual runbook for the same journey against a real library, with a snapshot and a
+field-by-field before/after diff. A few read-only tests can also target a real library, opt-in via
+`CALIBRE_MCP_TEST_REAL_LIBRARY`.
 
 ## Decision log
 
-The full, dated decision record (`AD-001` … `AD-019`) lives in
+The full, dated decision record (`AD-001` … `AD-030`) lives in
 [`.specs/STATE.md`](.specs/STATE.md). Highlights not covered above:
 
 - **AD-002/003 — local stdio, no auth, no network surface.** The host launches the server
@@ -193,4 +202,5 @@ The full, dated decision record (`AD-001` … `AD-019`) lives in
   alongside SQL reads and subprocess writes.
 
 This file is the stable "how it's built and why" reference. `.specs/STATE.md` and
-`.specs/ROADMAP.md` are the living planning documents, updated per feature.
+[`ROADMAP.md`](ROADMAP.md) (tactical) / [`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md) (strategic) /
+[`BACKLOG.md`](BACKLOG.md) are the living planning documents, updated per feature.

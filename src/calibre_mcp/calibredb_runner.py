@@ -35,6 +35,27 @@ _LOCK_INDICATORS = (
 )
 
 
+def _format_field_value(name: str, value: Any) -> str:
+    """Render one ``--field name:value`` value the way calibredb expects it.
+
+    List-valued fields are joined field-specifically: ``authors`` with
+    ``" & "``, other list fields (tags/languages) with ``,`` (AD-022).
+    ``calibredb set_metadata --field "authors:A,B"`` mashes co-authors into a
+    single author entity ``"A|B"``; ``" & "`` creates two distinct authors,
+    matching how Calibre itself displays/stores multi-author credits.
+    """
+    if isinstance(value, list):
+        separator = " & " if name == "authors" else ","
+        return separator.join(value)
+    if name == "rating":
+        # INVARIANT: callers speak Calibre's stored 0-10 scale (what the reader
+        # returns), but calibredb's --field rating takes STARS and stores N*2.
+        # Halving here is what keeps a write equal to its re-read (8 -> 4 stars
+        # -> stored 8); half stars are accepted (7 -> "3.5").
+        return f"{value / 2:g}"
+    return str(value)
+
+
 @dataclass
 class AddResult:
     """Outcome of ``calibredb add`` (ADD-01/03)."""
@@ -94,23 +115,10 @@ class CalibredbRunner:
         return [int(piece) for piece in out.split(",") if piece.strip()]
 
     def set_metadata(self, book_id: int, fields: dict[str, Any]) -> None:
-        """Apply ``fields`` via one ``--field`` per pair (EDIT-02).
-
-        List-valued fields are joined field-specifically: ``authors`` with
-        ``" & "``, other list fields (tags/languages) with ``,`` (AD-022).
-        ``calibredb set_metadata --field "authors:A,B"`` mashes co-authors into
-        a single author entity ``"A|B"``; ``" & "`` creates two distinct
-        authors, matching how Calibre itself displays/stores multi-author
-        credits.
-        """
+        """Apply ``fields`` via one ``--field`` per pair (EDIT-02)."""
         args = ["set_metadata", str(book_id)]
         for name, value in fields.items():
-            if isinstance(value, list):
-                separator = " & " if name == "authors" else ","
-                joined = separator.join(value)
-            else:
-                joined = str(value)
-            args += ["--field", f"{name}:{joined}"]
+            args += ["--field", f"{name}:{_format_field_value(name, value)}"]
         self._run(args)
 
     def add(self, path: Path) -> AddResult:

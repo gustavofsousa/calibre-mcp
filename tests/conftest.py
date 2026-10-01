@@ -3,18 +3,20 @@
 Test-safety rule (non-negotiable): writes must NEVER touch the user's real
 library. Write tests use the ``scratch_library`` fixture, which bootstraps an
 empty Calibre library in a temp dir. Read-only tests may use ``real_library``,
-which points at the real library and skips cleanly when it is absent.
+an opt-in pointer at a real library (``CALIBRE_MCP_TEST_REAL_LIBRARY``) that
+skips cleanly when unset or absent.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-REAL_LIBRARY_PATH = Path("/home/gustavo/Documents/BibliotecaCalibre")
+REAL_LIBRARY_ENV = "CALIBRE_MCP_TEST_REAL_LIBRARY"
 
 
 @pytest.fixture
@@ -45,9 +47,18 @@ def scratch_library(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def real_library() -> Path:
-    """Point at the real Calibre library, read-only; skip cleanly if absent."""
+    """Point at a real Calibre library, read-only; skip cleanly if absent.
+
+    Opt-in via ``CALIBRE_MCP_TEST_REAL_LIBRARY`` rather than a hard-coded path:
+    a personal path silently skips these tests for every other contributor and
+    in CI, and goes stale the moment the library moves.
+    """
     if shutil.which("calibredb") is None:
         pytest.skip("calibredb not on PATH")
-    if not (REAL_LIBRARY_PATH / "metadata.db").exists():
-        pytest.skip(f"real library not found at {REAL_LIBRARY_PATH}")
-    return REAL_LIBRARY_PATH
+    raw_path = os.environ.get(REAL_LIBRARY_ENV)
+    if not raw_path:
+        pytest.skip(f"{REAL_LIBRARY_ENV} is unset")
+    library_path = Path(raw_path)
+    if not (library_path / "metadata.db").exists():
+        pytest.skip(f"real library not found at {library_path}")
+    return library_path
