@@ -16,6 +16,7 @@ venv/
 .coverage
 htmlcov/
 .ruff_cache/
+.mypy_cache/
 
 # Calibre MCP backups (never commit library snapshots)
 .calibre-mcp-backups/
