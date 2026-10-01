@@ -8,7 +8,8 @@
 A local **MCP server** (stdio) that lets an LLM host — Claude Desktop, Claude Code, or any
 [MCP](https://modelcontextprotocol.io/)-compatible client — manage a
 [Calibre](https://calibre-ebook.com/) ebook library conversationally: search, edit metadata, add,
-convert, deduplicate, remove, and email books, all with human-in-the-loop safety.
+convert, deduplicate, organize, fix covers, fill metadata gaps, remove, and email books, all with
+human-in-the-loop safety.
 
 **Most Calibre MCP servers are read-only — they search and list. This one *writes* — and does it
 safely.** Editing metadata, adding, converting, and deleting books is where a tool can actually
@@ -33,7 +34,7 @@ impossible to do by accident:
 - **Reads** (`search`, `list`, `view`, duplicate-finding) query `metadata.db` directly, read-only —
   fast, and structurally incapable of corrupting the library (the SQLite connection is opened
   `mode=ro`).
-- **Writes** (`edit`, `add`, `remove`, `convert`, `email`) go through Calibre's own CLI tools
+- **Writes** (`edit`, `rename`, `add`, `remove`, `convert`, `merge`, `cover`, `email`) go through Calibre's own CLI tools
   (`calibredb`, `ebook-convert`, `calibre-smtp`) — never raw SQL — so Calibre stays authoritative
   over its own database.
 - Every write is preceded by an **automatic `metadata.db` backup** (rolling, keeps the last 20).
@@ -149,18 +150,40 @@ all logs go to stderr, on purpose (see [ARCHITECTURE.md](ARCHITECTURE.md#stdout-
 
 | Tool | What it does | Gate |
 | --- | --- | --- |
+| **Read** | | |
 | `search_books` | Resolve a Calibre search query (`author:asimov`, `tag:scifi`, …) to full book metadata. | read-only |
 | `list_books` | Paginated, sortable listing — works even when the Calibre GUI holds a write lock. | read-only |
 | `get_book` | Full metadata for one book id. | read-only |
+| `read_cover` | Return a book's cover as viewable image content. | read-only |
 | `find_duplicates` | Advisory report of likely-duplicate books by normalized (title, author). Never merges. | read-only |
+| **Curate** | | |
 | `update_metadata` | Edit a whitelisted field set (title, authors, tags, series, rating, comments, …). | plan → confirm |
 | `update_metadata_bulk` | Broadcast a field change to N books in one batch (`list_mode` add/remove/replace). | plan → confirm (batch) |
+| `rename_author` | Rename an author across every book — co-author-safe; renaming onto an existing name merges. | plan → confirm (batch) |
+| `rename_tag` | Rename a tag across every book — other tags untouched; merges onto an existing tag. | plan → confirm (batch) |
+| `rename_series` | Rename a series across every book — each book keeps its `series_index`. | plan → confirm (batch) |
+| `set_cover` | Set a book's cover from a local image file (replace vs. add shown in the plan). | plan → confirm |
+| `merge_duplicate_group` | Fold duplicate records into a survivor you choose — formats only, losers recoverably deleted. | plan → confirm (batch) |
+| **Enrich** *(outbound network — see below)* | | |
+| `enrich_from_identifier` | Propose missing description/publisher/pubdate/cover for one book from its ISBN. Writes nothing. | read-only proposal |
+| `enrich_missing` | Bounded sweep (default 25, max 100) proposing gap-fills for incomplete books with an ISBN. Writes nothing. | read-only proposal |
+| **Add & convert** | | |
 | `add_book` | Add a book from a local file path; surfaces duplicates honestly. | single-step (backed up) |
 | `import_folder` | Recursively import every ebook file found under a directory. | additive (backed up) |
 | `convert_book` | Convert to a new format (`epub`, `azw3`, `mobi`, `pdf`) — additive, keeps the original(s). | single-step (backed up) |
 | `convert_book_bulk` | Convert N books to one target format in one call. | additive (backed up) |
+| **Remove & deliver** | | |
 | `remove_book` | **Recoverable** removal: trash copy + Calibre recycle bin, never a hard delete. | plan → confirm |
 | `email_book` | Email a book's file via `calibre-smtp`, picking the best format automatically. | plan → confirm |
+
+**Enrichment applies through the normal gates.** The `enrich_*` tools only *propose*; you apply a
+proposal by feeding it to `update_metadata` (and its downloaded cover to `set_cover`), each behind
+its own plan → confirm. They are the only tools that touch the network: they send the book's
+**ISBN** to the [Open Library API](https://openlibrary.org/developers/api) (no key, no account).
+Every other tool is fully local.
+
+**`rating` uses Calibre's stored 0–10 scale** (0–5 stars × 2, so `8` = ★★★★). Odd values are half
+stars.
 
 Plus one MCP **resource**, `calibre://library/stats` — an aggregate library profile (totals,
 format/language mix, metadata completeness, data-quality flags) readable without any tool call.
@@ -173,35 +196,50 @@ sees, so they double as the API reference.
 
 ```bash
 uv run ruff check src tests   # lint
+uv run mypy                   # strict type-check
 uv run pytest                 # full suite (unit + integration + e2e)
 uv run pytest -m unit         # fast unit tests only
 ```
 
-137 tests across three tiers (`unit`, `integration`, `e2e`); write tests never touch a real
-library — see [ARCHITECTURE.md](ARCHITECTURE.md#testing-strategy).
+~390 tests across three tiers (`unit`, `integration`, `e2e`). Write tests never touch a real
+library: they run against throwaway scratch libraries seeded with synthetic sample books
+(`tests/sample_books.py`), so the whole write path runs in CI too. A handful of read-only checks can
+also run against your own library — opt in with `CALIBRE_MCP_TEST_REAL_LIBRARY=/path/to/library`.
+See [ARCHITECTURE.md](ARCHITECTURE.md#testing-strategy) and, for a manual end-to-end check against
+a real library without risking it, [docs/live-smoke-test.md](docs/live-smoke-test.md).
 
 ## Project layout
 
 ```
 src/calibre_mcp/
-├── server.py               # FastMCP tool surface — the only stdio/MCP-aware module
+├── server.py                # FastMCP tool surface — the only stdio/MCP-aware module
 ├── library.py               # CalibreLibrary facade — orchestrates every tool's business logic
 ├── sqlite_reader.py         # Read-only metadata.db access (the only sqlite3 call site)
 ├── calibredb_runner.py      # calibredb subprocess wrapper (search/edit/add/remove/add_format)
 ├── ebook_convert_runner.py  # ebook-convert subprocess wrapper
 ├── calibre_smtp_runner.py   # calibre-smtp subprocess wrapper
-├── backup.py                 # metadata.db snapshots + recoverable trash
-├── confirmation.py           # plan→confirm token derivation/verification
-├── config.py                  # env-driven startup config, fail-fast validation
-└── errors.py                  # the failure taxonomy every layer maps to
+├── openlibrary_client.py    # Open Library HTTP client (the only network call site)
+├── backup.py                # metadata.db snapshots + recoverable trash
+├── confirmation.py          # plan→confirm token derivation/verification
+├── bulk_edit.py             # pure list_mode (add/remove/replace) resolution for bulk edits
+├── rename_resolve.py        # pure rename algebra shared by author/tag/series renames
+├── author_rename.py         # author-rename entry point (thin re-export of rename_resolve)
+├── folder_scan.py           # pure ebook discovery for folder import
+├── config.py                # env-driven startup config, fail-fast validation
+└── errors.py                # the failure taxonomy every layer maps to
 ```
 
 ## Roadmap
 
-Shipped: full read/curate/distribute loop (search, list, view, edit, add, remove, convert,
-dedupe, email). What's next — library self-knowledge, bulk operations, cover/metadata enrichment,
-device sync — is tracked in [`.specs/ROADMAP.md`](.specs/ROADMAP.md), including the reasoning for
-sequencing and what's explicitly out of scope.
+Shipped: the full read → curate → organize → enrich → distribute loop above. Planning lives in
+three short docs:
+
+- [`ROADMAP.md`](ROADMAP.md) — **tactical**: which feature ships in which version, phase gates,
+  debt. Next up: closing v0.4 (cover coverage + enrichment for books without an ISBN), then
+  **metadata rollback** (restore any of the automatic `metadata.db` backups from the MCP).
+- [`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md) — **strategic**: what the project is for and the
+  gated bets beyond it.
+- [`BACKLOG.md`](BACKLOG.md) — the unsequenced pool of ideas, by domain.
 
 ## Contributing
 

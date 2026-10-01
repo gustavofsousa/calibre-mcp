@@ -224,17 +224,47 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   (b) reading the GUI's `library_path` as a fallback when the env is unset. Neither is scheduled.
   The operational contract (both files must agree) is documented host-side in
   `~/projects/10_dotfiles/docs/livros-calibre.md`.
+- **AD-029 — Test samples are synthetic; the real library is opt-in and read-only.** Confirmed
+  2026-10-01. **Context:** 14 test modules copied sample `.epub` files out of a hard-coded personal
+  path (`~/Documents/BibliotecaCalibre`). After the library moved (AD-028) — and in CI, where that
+  path never existed — **183 of 387 tests skipped silently** while the suite stayed green; the
+  "387 passed" gates recorded above were only true on the maintainer's machine before the move.
+  **Decision:** `tests/sample_books.py` builds distinct synthetic epubs with `ebook-convert` (present
+  wherever `calibredb` is, incl. CI), cached once per run; the `real_library` fixture reads
+  `CALIBRE_MCP_TEST_REAL_LIBRARY` (unset → skip) instead of a personal path; snapshot-pinned counts
+  in the real-library read tests became invariants (they had already drifted: 170 → 194 books);
+  `pytest -rs` is on by default so skips are always visible. **Consequences:** 358 passed / 34
+  skipped (all 34 = opt-in real-library reads, which pass 47/47 when opted in); CI now runs the
+  write path for real, at ~2× runtime.
+- **AD-030 — `rating` crosses the `calibredb` boundary as stars.** Confirmed 2026-10-01, found by the
+  first live smoke run against the real library (`docs/live-smoke-test.md`): `update_metadata(rating:
+  8)` stored **10**. `calibredb set_metadata --field rating:N` takes **stars (0–5)** and stores N×2,
+  while the tool contract, validation and `SqliteReader` all use the stored 0–10 scale — so every
+  rating write was doubled (clamped at 10). No test had ever round-tripped a rating. **Decision:**
+  `CalibredbRunner` halves `rating` when rendering `--field` (`_format_field_value`, half stars as
+  `3.5`); the 0–10 contract stays unchanged for callers. Covered by a parametrized round-trip test
+  (2/7/8/10; it was red for 2/7/8 before the fix). Bulk edit shares the same runner path.
+- **AD-031 — Planning split into tactical roadmap / strategic roadmap / backlog.** Confirmed
+  2026-10-01, following the workspace roadmap standard (`_hq/biblioteca/roadmaps`:
+  `ROADMAP-projeto-PADRAO` for delivery, `IK-roadmap-estrategico` for strategy). The single
+  `.specs/ROADMAP.md` (moved to the repo root) mixed a per-feature pipeline with quarterly,
+  signal-gated bets and unspecified ideas. Now: `ROADMAP.md` (versions v0.1–v1.0, one row per
+  Feature, phase gates, inherited debt), `ROADMAP-STRATEGY.md` (Phase A/B/C by quarter, gates,
+  business risks), `BACKLOG.md` (unsequenced ideas by domain, evidence-tagged). Phase labels are
+  kept in the tactical roadmap because every spec cites them.
 
 ## Backlog — deferred (post-P2)
 
-- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03/04 all shipped & Verified;
-  see Handoff. Phase 3 (Covers & Enrichment) now underway — see `.specs/ROADMAP.md`.)
+- Moved to [`BACKLOG.md`](../BACKLOG.md) (AD-031) — this section is no longer maintained.
 
 ## Environment
 
 - Calibre 8.2.100 installed: `calibredb`, `ebook-convert` on PATH. Python 3.12.3.
-- Real test library available: `/home/gustavo/Documents/BibliotecaCalibre/metadata.db`
-  (also a second one at `/home/gustavo/Documents/metadata.db`).
+- Real library (moved 2026-09, AD-028): `/home/gustavo/Documents/livros/biblioteca/metadata.db`.
+  Tests never depend on it (AD-029); opt in to the read-only checks with
+  `CALIBRE_MCP_TEST_REAL_LIBRARY=/home/gustavo/Documents/livros/biblioteca`.
+- If `uv run pytest` fails with "Failed to spawn", the `.venv` was created before the repo moved
+  (stale shebangs) — `uv sync --reinstall` fixes it.
 
 ## Handoff
 
@@ -387,10 +417,16 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   `.specs/features/enrichment-batch/validation.md`. Commits `0cec3d6` (reader) / `1e56ddd`
   (facade) / `6b77862` (tool) / `6ef64c7` (end-to-end cap test closing the Verifier's ENRICH3-07
   caveat). **Phase-3 ENRICH cluster (01/02/03) now closed.**
-- **Next:** Phase 3's last named candidate (ENRICH-03) is done. Re-check the **Phase-3 phase-gate**
-  (meaningful drop in `metadata_completeness` gaps after a curation session + every book has a
-  viewable cover) against a real run to decide whether Phase 3 can formally close, or whether an
-  un-named gap (e.g. a Google Books / second enrichment source, or a cover-batch) is worth opening.
+- **Phase-3 gate check (2026-10-01, live run — `docs/live-smoke-test.md`):** all 21 tools + the
+  stats resource exercised against the real library on `MCPTEST` copies; 194/194 real books
+  identical field by field afterwards. Gate **not met and not reachable with the shipped features**:
+  `enrich_missing` has 7 candidates in 196 books (only 51 carry an ISBN), and stats can't measure
+  cover coverage. Found + fixed the rating bug (AD-030); fixed the silently-skipping suite (AD-029).
+- **Next:** close v0.4 with STATS-02 (cover coverage) + ENRICH-04 (title/author lookup for books
+  without an ISBN — decide match-confidence surfacing at Specify), or consciously close v0.4 as-is
+  and pull **MAINT-04 (metadata rollback)**. See `ROADMAP.md`. Also high in `BACKLOG.md`: the
+  confirmation token binds the request, not the reviewed state, never expires and is computable by
+  the host — worth an AD before MAINT-04 reuses it.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
@@ -403,3 +439,6 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   test-safety rule enforced via the `scratch_library` fixture (writes never touch the real
   library) + the injectable `http_get` seam (tests never touch the real Open Library).
   Full build gate as of ENRICH-03's closeout: 387 passed, 0 failed; mypy + ruff clean.
+  **As of 2026-10-01 (AD-029/030):** 358 passed, 34 skipped (opt-in real-library reads; 47/47 pass
+  when opted in), mypy + ruff clean — the first gate where the write path runs without a personal
+  library, i.e. the first one CI actually reproduces.
