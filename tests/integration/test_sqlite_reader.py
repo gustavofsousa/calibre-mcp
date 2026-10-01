@@ -25,14 +25,11 @@ import pytest
 from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.errors import BookNotFoundError, InvalidInputError
 from calibre_mcp.sqlite_reader import Book, LibraryStats, SqliteReader
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path, name: str = "sample.epub", index: int = 0) -> Path:
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) <= index:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[index], dest)
     return dest
@@ -482,21 +479,26 @@ def test_library_stats_returns_every_ac1_sub_object(reader: SqliteReader):
 
 @pytest.mark.integration
 def test_library_stats_grounded_facts_against_real_library(reader: SqliteReader):
-    # STATS-01-01/02: grounded facts confirmed directly against metadata.db
-    # (170 books, ids 1-185, 64 placeholder pubdates, 14 Unknown-author books).
+    # STATS-01-01/02: grounded facts, asserted as invariants that hold for any
+    # library state rather than pinned to one snapshot's counts (which broke the
+    # moment the library grew past the 170 books it was written against).
     stats = reader.library_stats()
+    books = stats.totals["books"]
 
-    assert stats.totals["books"] == reader.count_books()
+    assert books == reader.count_books()
     assert stats.totals["max_id"] + 1 == stats.totals["next_id_hint"]
-    assert stats.data_quality["placeholder_pubdate_0101"] == 64
-    assert stats.data_quality["unknown_author_books"] == 14
-    assert stats.metadata_completeness["comments"]["filled"] == 49
+    assert 0 <= stats.data_quality["unknown_author_books"] <= books
+    assert 0 <= stats.metadata_completeness["comments"]["filled"] <= books
     # Edge case: real (non-placeholder) pubdates are mutually exclusive with
-    # placeholder_pubdate_0101 and counted separately (170 - 64 = 106).
-    assert stats.metadata_completeness["real_pubdate"]["filled"] == 106
+    # placeholder_pubdate_0101 and together cover every book.
+    assert (
+        stats.metadata_completeness["real_pubdate"]["filled"]
+        + stats.data_quality["placeholder_pubdate_0101"]
+        == books
+    )
     # Edge case: books with no language recorded land in an explicit "unset"
     # bucket rather than being silently dropped from the total.
-    assert stats.languages["unset"] == 91
+    assert "unset" in stats.languages
     assert sum(stats.languages.values()) == stats.totals["books"]
 
 
@@ -514,8 +516,8 @@ def test_library_stats_pct_guarded_and_tie_breakers_deterministic(
     assert len(stats.tags["top"]) <= 10
     author_counts = [entry["count"] for entry in stats.authors["top"]]
     assert author_counts == sorted(author_counts, reverse=True)
-    # STATS-01-01 grounded: "Eiichirô Oda" (20 books) is the top author.
-    assert stats.authors["top"][0] == {"name": "Eiichirô Oda", "count": 20}
+    tied_at_top = [e for e in stats.authors["top"] if e["count"] == author_counts[0]]
+    assert tied_at_top == sorted(tied_at_top, key=lambda e: e["name"])
 
 
 @pytest.mark.integration

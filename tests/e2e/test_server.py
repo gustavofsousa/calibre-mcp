@@ -66,8 +66,7 @@ from calibre_mcp.config import (
 )
 from calibre_mcp.errors import EnrichmentSourceError
 from calibre_mcp.openlibrary_client import OpenLibraryRecord
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _valid_cover_png(path: Path, width: int = 100, height: int = 150) -> Path:
@@ -133,10 +132,8 @@ def _seed_covered_book(library_path: Path, tmp_path: Path) -> int:
 
 
 def _sample_epub(tmp_path: Path, name: str = "sample.epub") -> Path:
-    """Copy one real .epub into a temp path (reading the real library is safe)."""
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if not sources:
-        pytest.skip("no sample .epub available in the real library")
+    """Copy one synthetic sample .epub into a temp path."""
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[0], dest)
     return dest
@@ -392,9 +389,7 @@ def test_update_metadata_invalid_field_is_tool_error(seeded: int):
 def two_seeded(env: Path, tmp_path: Path) -> list[int]:
     """Seed two DISTINCT books (different source files) and return their ids."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "one.epub")
     shutil.copy2(sources[1], tmp_path / "two.epub")
     id1 = runner.add(tmp_path / "one.epub").book_id
@@ -521,9 +516,7 @@ def test_stdout_stays_clean_across_bulk_edit_calls(two_seeded: list[int]):
 def author_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed two books: one credited to 'Old Name', one to 'Someone Else'."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "old.epub")
     shutil.copy2(sources[1], tmp_path / "other.epub")
     old_id = runner.add(tmp_path / "old.epub").book_id
@@ -582,9 +575,7 @@ def test_rename_author_not_found_is_tool_error(env: Path):
 def tag_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed two books: one tagged 'old-tag', one tagged 'other-tag'."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "old.epub")
     shutil.copy2(sources[1], tmp_path / "other.epub")
     old_id = runner.add(tmp_path / "old.epub").book_id
@@ -638,9 +629,7 @@ def test_rename_tag_not_found_is_tool_error(env: Path):
 def series_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed two books: one in series 'Old' (index 7.5), one in 'Other'."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "old.epub")
     shutil.copy2(sources[1], tmp_path / "other.epub")
     old_id = runner.add(tmp_path / "old.epub").book_id
@@ -831,9 +820,7 @@ def test_remove_book_description_states_recoverable_two_step():
 def merge_seeded(env: Path, tmp_path: Path) -> tuple[int, int]:
     """Seed a survivor (EPUB only) and a loser (EPUB + PDF), distinct files."""
     runner = CalibredbRunner(env)
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) < 2:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     shutil.copy2(sources[0], tmp_path / "survivor.epub")
     shutil.copy2(sources[1], tmp_path / "loser.epub")
     survivor_id = runner.add(tmp_path / "survivor.epub").book_id
@@ -1065,7 +1052,7 @@ def test_find_duplicates_returns_groups(env: Path, tmp_path: Path):
     # ORG-01 AC-1: two same-title/same-author books -> one group of 2.
     runner = CalibredbRunner(env)
     id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
-    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    shutil.copy2(sample_epub_sources()[1], tmp_path / "two.epub")
     id2 = runner.add(tmp_path / "two.epub").book_id
     runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
     runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
@@ -1207,7 +1194,7 @@ def test_library_stats_resource_returns_well_formed_profile(
     # well-formed and the known duplicate group is present.
     runner = CalibredbRunner(env)
     id1 = runner.add(_sample_epub(tmp_path, "one.epub")).book_id
-    shutil.copy2(list(REAL_LIBRARY.glob("**/*.epub"))[1], tmp_path / "two.epub")
+    shutil.copy2(sample_epub_sources()[1], tmp_path / "two.epub")
     id2 = runner.add(tmp_path / "two.epub").book_id
     runner.set_metadata(id1, {"title": "Same Title", "authors": ["Same Author"]})
     runner.set_metadata(id2, {"title": "Same Title", "authors": ["Same Author"]})
