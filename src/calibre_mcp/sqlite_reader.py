@@ -15,6 +15,10 @@ from typing import Any
 
 from .errors import BookNotFoundError, InvalidInputError
 
+# STATS-02: the uncovered ids listed in the stats snapshot are bounded so the
+# payload stays small on a large library; the full count is the completeness row.
+MISSING_COVER_IDS_CAP = 50
+
 
 @dataclass
 class LibraryStats:
@@ -513,6 +517,9 @@ class SqliteReader:
             "rating": conn.execute(
                 "SELECT COUNT(DISTINCT book) AS n FROM books_ratings_link"
             ).fetchone()["n"],
+            "cover": conn.execute(
+                "SELECT COUNT(*) AS n FROM books WHERE has_cover = 1"
+            ).fetchone()["n"],
         }
         return {
             field: {"filled": filled, "pct": pct(filled)}
@@ -572,11 +579,19 @@ class SqliteReader:
         rating_used = conn.execute(
             "SELECT COUNT(*) AS n FROM books_ratings_link"
         ).fetchone()["n"]
+        missing_cover_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM books WHERE has_cover = 0 ORDER BY id LIMIT ?",
+                (MISSING_COVER_IDS_CAP,),
+            )
+        ]
         return {
             "unknown_author_books": unknown_author_books,
             "placeholder_pubdate_0101": placeholder_pubdate,
             "series_unused": series_used == 0,
             "rating_unused": rating_used == 0,
+            "missing_cover_ids": missing_cover_ids,
         }
 
     def find_duplicate_groups(self) -> list[list[Book]]:

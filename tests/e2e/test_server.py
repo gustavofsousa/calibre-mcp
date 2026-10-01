@@ -1216,6 +1216,19 @@ def test_library_stats_resource_empty_library_is_zeroed_not_an_error(env: Path):
 
 
 @pytest.mark.e2e
+def test_library_stats_resource_reports_cover_coverage(env: Path, tmp_path: Path):
+    # COVCOV-04: the resource payload carries cover coverage + missing ids.
+    covered = _seed_covered_book(env, tmp_path)
+    uncovered = _seed_empty_book(env, "No Cover")
+
+    stats = _read_resource("calibre://library/stats")
+
+    assert stats["metadata_completeness"]["cover"] == {"filled": 1, "pct": 50.0}
+    assert stats["data_quality_flags"]["missing_cover_ids"] == [uncovered]
+    assert covered != uncovered
+
+
+@pytest.mark.e2e
 def test_library_stats_resource_unreadable_db_is_resource_error(env: Path):
     # STATS-01-04 (AC-4): a corrupt metadata.db (present on disk, unreadable
     # as SQLite) -> a named ResourceError, never a silent empty/wrong profile.

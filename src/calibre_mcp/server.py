@@ -624,8 +624,9 @@ def email_book(
 @_map_resource_errors
 def library_stats_resource() -> dict:
     """Aggregate baseline profile of the library (STATS-01): totals, format/
-    language mix, metadata completeness, identifier types, top authors/tags,
-    and data-quality flags (including duplicate-title groups). Read-only,
+    language mix, metadata completeness (including cover coverage, STATS-02),
+    identifier types, top authors/tags, and data-quality flags (duplicate-title
+    groups, and ``missing_cover_ids`` -- up to 50 uncovered book ids). Read-only,
     parameter-free, and lock-independent — known on connect without a tool
     call.
     """
