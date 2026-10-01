@@ -28,6 +28,12 @@ from .errors import EnrichmentSourceError
 _BOOKS_API = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
 _EDITION_URL = "https://openlibrary.org/isbn/{isbn}.json"
 _WORK_URL = "https://openlibrary.org{work_key}.json"
+# Title/author search (ENRICH-04): only the fields the matcher and the proposal
+# use, so responses stay cheap (the docs warn `fields=*` is expensive).
+_SEARCH_URL = "https://openlibrary.org/search.json?{query}"
+_SEARCH_FIELDS = "key,title,author_name,cover_i"
+_SEARCH_LIMIT = 5
+_COVER_ID_URL = "https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
 
 # Descriptive User-Agent so Open Library can attribute traffic (LOOKUP-10).
 _DEFAULT_UA = "calibre-mcp/enrich (+https://github.com/gustavofsousa/calibre-mcp)"
@@ -168,6 +174,71 @@ class OpenLibraryClient:
             raise EnrichmentSourceError(reason, cover_url) from exc
         return Path(temp_path)
 
+    def search_works(self, title: str, author: str | None) -> list[SearchCandidate]:
+        """Search Open Library works by title (+ author) (ENRICH-04, TSEARCH-01).
+
+        At most ``_SEARCH_LIMIT`` candidates, in Open Library's own order. When
+        a query that included ``author`` finds nothing, one retry with the title
+        alone: catalogs spell authors differently ("Papa Francisco" vs "Pope
+        Francis"), and the matcher still checks the author afterwards. A
+        transport/parse failure raises ``EnrichmentSourceError`` (TSEARCH-07).
+        """
+        candidates = self._search(title, author)
+        if not candidates and author is not None:
+            candidates = self._search(title, None)
+        return candidates
+
+    def fetch_work_description(self, work_key: str) -> str | None:
+        """The work's description, or ``None`` on any failure (best-effort).
+
+        A failed description must never lose the rest of a proposal (TSEARCH-07,
+        LOOKUP-04), so transport, parse and shape problems all yield ``None``.
+        """
+        try:
+            work = self._parse_json(
+                self._fetch(_WORK_URL.format(work_key=work_key)), ""
+            )
+        except EnrichmentSourceError:
+            return None
+        return self._flatten_description(work.get("description"))
+
+    def _search(self, title: str, author: str | None) -> list[SearchCandidate]:
+        params = {"title": title}
+        if author is not None:
+            params["author"] = author
+        params["limit"] = str(_SEARCH_LIMIT)
+        params["fields"] = _SEARCH_FIELDS
+        url = _SEARCH_URL.format(query=urllib.parse.urlencode(params))
+        docs = self._parse_json(self._fetch(url), url).get("docs")
+        if not isinstance(docs, list):
+            return []
+        return [
+            candidate
+            for doc in docs[:_SEARCH_LIMIT]
+            if (candidate := self._to_candidate(doc)) is not None
+        ]
+
+    @staticmethod
+    def _to_candidate(doc: object) -> SearchCandidate | None:
+        if not isinstance(doc, dict):
+            return None
+        key, title = doc.get("key"), doc.get("title")
+        if not isinstance(key, str) or not key or not isinstance(title, str):
+            return None
+        names = doc.get("author_name")
+        authors = (
+            [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
+        )
+        cover_id = doc.get("cover_i")
+        cover_url = (
+            _COVER_ID_URL.format(cover_id=cover_id)
+            if isinstance(cover_id, int)
+            else None
+        )
+        return SearchCandidate(
+            work_key=key, title=title, authors=authors, cover_url=cover_url
+        )
+
     def _fetch_work_description(self, isbn: str) -> str | None:
         """Follow edition->work for the description; any failure -> ``None``.
 
@@ -177,17 +248,15 @@ class OpenLibraryClient:
         """
         try:
             edition = self._parse_json(self._fetch(_EDITION_URL.format(isbn=isbn)), "")
-            works = edition.get("works")
-            if not isinstance(works, list) or not works:
-                return None
-            work_key = works[0].get("key") if isinstance(works[0], dict) else None
-            if not isinstance(work_key, str) or not work_key:
-                return None
-            work_url = _WORK_URL.format(work_key=work_key)
-            work = self._parse_json(self._fetch(work_url), "")
-            return self._flatten_description(work.get("description"))
         except EnrichmentSourceError:
             return None
+        works = edition.get("works")
+        if not isinstance(works, list) or not works:
+            return None
+        work_key = works[0].get("key") if isinstance(works[0], dict) else None
+        if not isinstance(work_key, str) or not work_key:
+            return None
+        return self.fetch_work_description(work_key)
 
     @staticmethod
     def _parse_json(raw: bytes, url: str) -> dict[str, Any]:
