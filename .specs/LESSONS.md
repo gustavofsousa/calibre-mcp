@@ -14,17 +14,53 @@ _none_
 
 Seen once or not yet corroborated. Tracked, not trusted.
 
-### L-009 — When a value crosses an external-CLI boundary, add a write-then-reread round-trip test per field whose unit could differ (scale, encoding, separator) — range validation alone cannot catch a unit mismatch.
-- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `runner-boundary` · harmful: 0
-- features: calibre-management
-- evidence: AD-030; tests/integration/test_calibredb_runner.py rating round-trip (runner-boundary)
-- last seen: 2026-10-01T22:01:50Z
+### L-001 — When a facade method backs up before a write for AD-011 safety, add a call-order test (spy/monkeypatch recording invocation order), not just a post-hoc existence check on the backup file.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `library-facade` · harmful: 0
+- features: calibre-management-p2
+- evidence: src/calibre_mcp/library.py:144-151 (mutant 4, validation.md) (library-facade)
+- last seen: 2026-07-17T15:11:39Z
 
-### L-010 — Never source test fixtures from an absolute personal path — generate them, and fail rather than skip when they're missing, because a skip keeps the gate green while the path under test silently stops running.
-- signal: `gate_fail` · recurrence: 1 feature(s) · scope: `test-infrastructure` · harmful: 0
-- features: calibre-management
-- evidence: AD-029; tests/sample_books.py (test-infrastructure)
-- last seen: 2026-10-01T22:01:50Z
+### L-002 — When an AC names two branches (explicit choice vs. default-preference fallback), write a passing-case test for each branch, not just the fallback success case and the explicit-choice failure case.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `test-coverage` · harmful: 0
+- features: calibre-management-p2
+- evidence: EMAIL-01 AC-3 (spec.md); tests/integration/test_library_p2.py (test-coverage)
+- last seen: 2026-07-17T15:11:39Z
+
+### L-003 — A spec claim of lock-independence for a read path needs a test that actually holds a lock during the read, not just reuse of a mode=ro connection pattern already used elsewhere.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `read-layer` · harmful: 0
+- features: library-stats
+- evidence: STATS-01-03, .specs/features/library-stats/validation.md (read-layer)
+- last seen: 2026-07-20T17:20:25Z
+
+### L-004 — When a framework already wraps all handler exceptions into a generic error type, test the app-level exception mapper directly (unit-level, bypassing the framework) rather than relying on an end-to-end assertion that the framework's catch-all can satisfy on its own.
+- signal: `surviving_mutant` · recurrence: 1 feature(s) · scope: `server-errors` · harmful: 0
+- features: library-stats
+- evidence: src/calibre_mcp/server.py:87-89 (mutation #3), .specs/features/library-stats/validation.md (server-errors)
+- last seen: 2026-07-20T17:20:25Z
+
+### L-005 — Cover every spec Edge Case with an assertion on the specific value or multiplicity it calls out, not just a key-presence or single-instance check that would pass even if the edge-case logic were removed.
+- signal: `ac_gap` · recurrence: 1 feature(s) · scope: `spec-driven-tests` · harmful: 0
+- features: library-stats
+- evidence: spec.md Edge Cases (unset bucket, multiple duplicate groups, real_pubdate), .specs/features/library-stats/validation.md (spec-driven-tests)
+- last seen: 2026-07-20T17:20:25Z
+
+### L-006 — Before extracting a shared side-effecting core, check existing tests for assertions on side-effect ORDER (e.g. 'no backup on a failed convert') stricter than the spec AC — reusing one core across callers can force a new ordering; reconcile against the AC and get sign-off before editing the over-specified assertion.
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `src/calibre_mcp/library.py:convert` · harmful: 0
+- features: bulk-convert
+- evidence: tests/integration/test_library_p2.py::test_convert_book_bogus_source_surfaces_error_and_adds_nothing (src/calibre_mcp/library.py:convert)
+- last seen: 2026-07-30T21:44:18Z
+
+### L-007 — Cover every spec-listed edge case with its own direct assertion instead of relying on another test's mechanism or by-construction correctness
+- signal: `spec_precision_gap` · recurrence: 1 feature(s) · scope: `tests` · harmful: 0
+- features: author-rename
+- evidence: .specs/features/author-rename/validation.md (Edge Cases: case-only rename; set-change token mismatch) (tests)
+- last seen: 2026-07-31T02:53:00Z
+
+### L-008 — Annotate a FastMCP tool that returns MCP Image content as -> Any, not a real Image|dict union: the union crashes tool registration under mcp SDK 1.28.1 (pydantic create_model has no schema for Image); runtime wire behavior is identical since FastMCP dispatches on the returned value's type
+- signal: `spec_deviation` · recurrence: 1 feature(s) · scope: `src/calibre_mcp/server.py` · harmful: 0
+- features: cover-read
+- evidence: .specs/features/cover-read/validation.md (SPEC_DEVIATION: read_cover -> Any); src/calibre_mcp/server.py read_cover (src/calibre_mcp/server.py)
+- last seen: 2026-07-31T23:36:39Z
 
 ## Quarantined (failed when applied — ignore)
 
