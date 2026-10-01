@@ -441,3 +441,90 @@ def test_fetch_work_description_failure_is_none_not_an_error() -> None:
     client = OpenLibraryClient(http_get=spy)
 
     assert client.fetch_work_description("/works/OL1W") is None
+
+
+# ---------------------------------------------- AD-032: request pacing (1 req/s)
+
+
+class _FakeClock:
+    """A controllable monotonic clock; ``sleep`` advances it and records waits."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.slept: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(round(seconds, 6))
+        self.now += seconds
+
+
+@pytest.mark.unit
+def test_pacing_first_request_never_waits() -> None:
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([b"{}"]), min_interval=1.0, sleep=time.sleep, clock=time.clock
+    )
+
+    client._fetch("https://openlibrary.org/a")
+
+    assert time.slept == []
+
+
+@pytest.mark.unit
+def test_pacing_waits_only_the_remainder_of_the_interval() -> None:
+    # Open Library documents 1 request/second for unidentified clients.
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([b"{}", b"{}"]),
+        min_interval=1.0,
+        sleep=time.sleep,
+        clock=time.clock,
+    )
+
+    client._fetch("https://openlibrary.org/a")
+    time.now += 0.3
+    client._fetch("https://openlibrary.org/b")
+
+    assert time.slept == [0.7]
+
+
+@pytest.mark.unit
+def test_pacing_no_wait_once_the_interval_has_passed() -> None:
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([b"{}", b"{}"]),
+        min_interval=1.0,
+        sleep=time.sleep,
+        clock=time.clock,
+    )
+
+    client._fetch("https://openlibrary.org/a")
+    time.now += 2.0
+    client._fetch("https://openlibrary.org/b")
+
+    assert time.slept == []
+
+
+@pytest.mark.unit
+def test_pacing_applies_to_retries_too() -> None:
+    # A retry is a request: it must not burst right after the failed attempt.
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([EnrichmentSourceError("blip"), b"{}"]),
+        min_interval=1.0,
+        sleep=time.sleep,
+        clock=time.clock,
+    )
+
+    client._fetch("https://openlibrary.org/a")
+
+    assert time.slept == [1.0]
+
+
+@pytest.mark.unit
+def test_pacing_defaults_to_one_second_for_the_real_transport() -> None:
+    assert OpenLibraryClient()._min_interval == 1.0
+    assert OpenLibraryClient(http_get=_Spy([]))._min_interval == 0.0

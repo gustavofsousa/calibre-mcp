@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +42,10 @@ _DEFAULT_UA = "calibre-mcp/enrich (+https://github.com/gustavofsousa/calibre-mcp
 # The injectable transport seam: url + timeout -> raw bytes. Tests feed a fake so
 # no test ever touches the real network (spec test-safety rule).
 HttpGet = Callable[[str, float], bytes]
+
+# Open Library's documented limit for unidentified clients is 1 request/second
+# (https://openlibrary.org/developers/api); a batch sweep must not burst past it.
+_REAL_TRANSPORT_MIN_INTERVAL = 1.0
 
 
 @dataclass(frozen=True)
@@ -82,10 +87,21 @@ class OpenLibraryClient:
         timeout: float = 10.0,
         retries: int = 1,
         user_agent: str = _DEFAULT_UA,
+        min_interval: float | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._timeout = timeout
         self._retries = retries
         self._user_agent = user_agent
+        # Pacing protects the real API; an injected transport (tests) has no
+        # remote to protect, so it is unpaced unless a test asks for pacing.
+        if min_interval is None:
+            min_interval = _REAL_TRANSPORT_MIN_INTERVAL if http_get is None else 0.0
+        self._min_interval = min_interval
+        self._sleep = sleep
+        self._clock = clock
+        self._last_request_at: float | None = None
         # Default to the real urllib transport; the None sentinel lets that default
         # bind to this instance's user_agent while keeping the seam 2-arg.
         self._http_get: HttpGet = http_get if http_get is not None else self._urllib_get
@@ -117,6 +133,7 @@ class OpenLibraryClient:
         """
         last_error: EnrichmentSourceError | None = None
         for _ in range(self._retries + 1):
+            self._wait_for_turn()
             try:
                 return self._http_get(url, self._timeout)
             except EnrichmentSourceError as exc:
@@ -173,6 +190,16 @@ class OpenLibraryClient:
             reason = f"could not write cover: {exc}"
             raise EnrichmentSourceError(reason, cover_url) from exc
         return Path(temp_path)
+
+    def _wait_for_turn(self) -> None:
+        """Sleep just long enough to keep >= ``min_interval`` between requests."""
+        now = self._clock()
+        if self._last_request_at is not None:
+            remaining = self._min_interval - (now - self._last_request_at)
+            if remaining > 0:
+                self._sleep(remaining)
+                now = self._clock()
+        self._last_request_at = now
 
     def search_works(self, title: str, author: str | None) -> list[SearchCandidate]:
         """Search Open Library works by title (+ author) (ENRICH-04, TSEARCH-01).
