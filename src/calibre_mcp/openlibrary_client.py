@@ -52,6 +52,20 @@ class OpenLibraryRecord:
     cover_url: str | None
 
 
+@dataclass(frozen=True)
+class SearchCandidate:
+    """One work returned by Open Library's title/author search (ENRICH-04).
+
+    Work-level only: ``work_key`` (``/works/OL…W``) leads to the description,
+    ``cover_url`` is the id-form cover URL (not rate-limited, AD-026).
+    """
+
+    work_key: str
+    title: str
+    authors: list[str]
+    cover_url: str | None
+
+
 class OpenLibraryClient:
     """Fetches metadata + covers from Open Library over a bounded, retrying seam."""
 
