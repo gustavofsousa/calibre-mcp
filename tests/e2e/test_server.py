@@ -1314,8 +1314,9 @@ def test_enrich_from_identifier_returns_found_true_payload(env: Path):
 
 @pytest.mark.e2e
 def test_enrich_from_identifier_found_false_is_normal_json_not_error(env: Path):
-    # LOOKUP-02: a book with no ISBN surfaces found:false as normal JSON, not an error.
-    book_id = _seed_empty_book(env, "NoIsbn")
+    # LOOKUP-02 (revised by TSEARCH-06): no ISBN and no usable title surfaces
+    # found:false as normal JSON, not an error.
+    book_id = _seed_empty_book(env, "Unknown")
     server._get_library()._enricher = _EnrichFake(
         OpenLibraryRecord("X", "Y", "Z", None)
     )
@@ -1325,7 +1326,7 @@ def test_enrich_from_identifier_found_false_is_normal_json_not_error(env: Path):
     assert result == {
         "book_id": book_id,
         "found": False,
-        "reason": "no usable identifier (ISBN)",
+        "reason": "no usable identifier (ISBN) or title",
     }
 
 

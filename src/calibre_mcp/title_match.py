@@ -60,10 +60,15 @@ def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def _usable_author(author: str | None) -> str | None:
-    if author is None or not author.strip() or author.strip() == "Unknown":
+def usable_value(value: str | None) -> str | None:
+    """``value`` unless it is blank or Calibre's ``Unknown`` placeholder.
+
+    Calibre stores ``Unknown`` for a missing title or author, so it carries no
+    information to search or compare with.
+    """
+    if value is None or not value.strip() or value.strip() == "Unknown":
         return None
-    return author
+    return value
 
 
 def classify(title_similarity: float, author_similarity: float | None) -> Confidence:
@@ -86,7 +91,7 @@ def score(
     title_similarity = _ratio(
         normalize_title(book_title), normalize_title(candidate.title)
     )
-    author = _usable_author(book_author)
+    author = usable_value(book_author)
     author_similarity: float | None = None
     if author is not None:
         book_name = _normalize_name(author)

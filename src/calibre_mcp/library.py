@@ -32,6 +32,7 @@ from .folder_scan import scan_ebook_files
 from .openlibrary_client import OpenLibraryClient, OpenLibraryRecord
 from .rename_resolve import resolve_renamed_values
 from .sqlite_reader import Book, SqliteReader
+from .title_match import MatchScore, pick_best, usable_value
 
 # CONV-01: formats convert_book accepts as a target, and the device-preference
 # order email_book uses to pick an attachment when none is specified.
@@ -212,12 +213,8 @@ class CalibreLibrary:
         """
         book = self._reader.get_book(book_id)  # LOOKUP-03, before any network
         isbn = self._normalize_isbn(book.identifiers.get("isbn"))
-        if not isbn:  # LOOKUP-02: nothing to look up, no network call
-            return {
-                "book_id": book_id,
-                "found": False,
-                "reason": "no usable identifier (ISBN)",
-            }
+        if not isbn:  # ENRICH-04: no exact key -> title/author search
+            return self._enrich_by_search(book)
 
         record = self._enricher.fetch_record(isbn)  # LOOKUP-08 propagates
         identifier_used = {"type": "isbn", "value": isbn}
@@ -238,6 +235,81 @@ class CalibreLibrary:
             "proposed": proposed,
             "skipped_present": skipped,
             "cover": self._propose_cover(book_id, record),
+        }
+
+    def _enrich_by_search(self, book: Book) -> dict[str, Any]:
+        """Propose enrichment for an ISBN-less book via title/author search
+        (ENRICH-04, TSEARCH-01..08).
+
+        Only a ``high`` best match becomes a proposal, and only for work-level
+        fields — the description (``comments``) and the cover; ``publisher`` /
+        ``pubdate`` are edition-specific and a search match can't pick the
+        edition. A lower match is reported (so the user sees what was found)
+        but never proposed, and nothing more is fetched for it. Read-only.
+        """
+        title = usable_value(book.title)
+        if title is None:  # TSEARCH-06 (LOOKUP-02 revised): no network
+            return {
+                "book_id": book.id,
+                "found": False,
+                "reason": "no usable identifier (ISBN) or title",
+            }
+        author = usable_value(book.authors[0] if book.authors else None)
+        best = pick_best(title, author, self._enricher.search_works(title, author))
+        if best is None:  # TSEARCH-05
+            return {
+                "book_id": book.id,
+                "found": False,
+                "reason": "no record at source",
+                "match": None,
+            }
+        match = self._shape_match(best)
+        if best.confidence != "high":  # TSEARCH-04: shown, never proposed
+            return {
+                "book_id": book.id,
+                "found": False,
+                "reason": "no confident match",
+                "match": match,
+            }
+
+        description = None
+        if self._field_missing(book, "comments"):
+            description = self._enricher.fetch_work_description(
+                best.candidate.work_key
+            )
+        # publisher/pubdate stay None, so _gap_proposal structurally can't
+        # propose them for a search match (TSEARCH-03).
+        record = OpenLibraryRecord(
+            publisher=None,
+            pubdate=None,
+            description=description,
+            cover_url=best.candidate.cover_url,
+        )
+        proposed, skipped = self._gap_proposal(book, record)
+        return {
+            "book_id": book.id,
+            "found": True,
+            "source": "openlibrary",
+            "identifier_used": None,
+            "match": match,
+            "proposed": proposed,
+            "skipped_present": skipped,
+            "cover": self._propose_cover(book.id, record),
+        }
+
+    @staticmethod
+    def _shape_match(best: MatchScore) -> dict[str, Any]:
+        author_similarity = best.author_similarity
+        return {
+            "method": "search",
+            "confidence": best.confidence,
+            "title": best.candidate.title,
+            "authors": best.candidate.authors,
+            "work_key": best.candidate.work_key,
+            "title_similarity": round(best.title_similarity, 2),
+            "author_similarity": (
+                None if author_similarity is None else round(author_similarity, 2)
+            ),
         }
 
     def enrich_missing(

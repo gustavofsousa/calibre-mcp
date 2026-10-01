@@ -111,7 +111,8 @@ without risking a wrong-book write.
 - **Verification:** integration test. **Priority:** Required.
 
 #### TSEARCH-06: Nothing usable to search with (LOOKUP-02, revised)
-- **Scenario:** no usable ISBN and a blank title.
+- **Scenario:** no usable ISBN and no usable title — blank or Calibre's own placeholder
+  `Unknown` (Calibre stores `Unknown` when a book has no title) *[revised before Execute]*.
 - **Expected:** `{book_id, found: false, reason: "no usable identifier (ISBN) or title"}`, **no
   network call**.
 - **Verification:** integration test (enricher never called). **Priority:** Required.
@@ -139,7 +140,7 @@ description; the same book with author "Unknown" → `found: false, "no confiden
 - **Action:** `enrich_missing(limit, offset)`.
 - **Expected:** candidates = (ISBN books missing comments/publisher/pubdate — unchanged) ∪ (books
   without a usable ISBN, with a non-blank title, missing comments OR without a cover), ordered by id,
-  same caps/paging (AD-027). Each result is exactly what `enrich_from_identifier` returns for that
+  same caps/paging (AD-027). "Non-blank title" excludes Calibre's `Unknown` placeholder (TSEARCH-06). Each result is exactly what `enrich_from_identifier` returns for that
   book plus a `status`; a `found:false, "no confident match"` result has `status:
   "no_confident_match"`; `summary` gains that bucket (`{proposed, no_new_data, no_record,
   no_confident_match, error}`).
