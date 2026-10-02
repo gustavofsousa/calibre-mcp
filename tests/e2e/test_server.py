@@ -65,7 +65,7 @@ from calibre_mcp.config import (
     SMTP_USERNAME_ENV,
 )
 from calibre_mcp.errors import EnrichmentSourceError
-from calibre_mcp.openlibrary_client import OpenLibraryRecord
+from calibre_mcp.openlibrary_client import OpenLibraryRecord, SearchCandidate
 from sample_books import sample_epub_sources
 
 
@@ -1270,9 +1270,19 @@ class _EnrichFake:
         record: OpenLibraryRecord | None,
         *,
         fetch_error: Exception | None = None,
+        candidates: list[SearchCandidate] | None = None,
+        description: str | None = None,
     ) -> None:
         self._record = record
         self._fetch_error = fetch_error
+        self._candidates = candidates or []
+        self._description = description
+
+    def search_works(self, title: str, author: str | None) -> list[SearchCandidate]:
+        return self._candidates
+
+    def fetch_work_description(self, work_key: str) -> str | None:
+        return self._description
 
     def fetch_record(self, isbn: str) -> OpenLibraryRecord | None:
         if self._fetch_error is not None:
@@ -1310,6 +1320,65 @@ def test_enrich_from_identifier_returns_found_true_payload(env: Path):
         "pubdate": "April 2009",
     }
     assert result["cover"] is None
+
+
+@pytest.mark.e2e
+def test_enrich_from_identifier_search_match_applies_through_update_metadata(
+    env: Path, tmp_path: Path
+):
+    # TSEARCH-03/08: an ISBN-less book gets a high-confidence search proposal
+    # through the tool surface, and its `proposed` is accepted verbatim by
+    # update_metadata's plan->confirm (the only write path).
+    book_id = _seed_covered_book(env, tmp_path)  # has a cover -> no download
+    CalibredbRunner(env).set_metadata(
+        book_id, {"title": "The Hobbit", "authors": ["J. R. R. Tolkien"]}
+    )
+    server._get_library()._enricher = _EnrichFake(
+        None,
+        candidates=[
+            SearchCandidate("/works/OL262758W", "The Hobbit", ["J.R.R. Tolkien"], None)
+        ],
+        description="A hobbit goes on an adventure.",
+    )
+
+    result = _call("enrich_from_identifier", {"book_id": book_id})
+
+    assert result["found"] is True
+    assert result["identifier_used"] is None
+    assert result["match"]["method"] == "search"
+    assert result["match"]["confidence"] == "high"
+    assert result["proposed"] == {"comments": "A hobbit goes on an adventure."}
+    plan = _call(
+        "update_metadata", {"book_id": book_id, "fields": result["proposed"]}
+    )
+    applied = _call(
+        "update_metadata",
+        {
+            "book_id": book_id,
+            "fields": result["proposed"],
+            "confirmation_token": plan["confirmation_token"],
+        },
+    )
+    assert applied["book"]["comments"] == "A hobbit goes on an adventure."
+
+
+@pytest.mark.e2e
+def test_enrich_missing_reports_no_confident_match_as_json(env: Path):
+    # TSEARCH-09: an ISBN-less book whose best match is not high is swept,
+    # reported with its match, and never proposed.
+    book_id = _seed_empty_book(env, "Dune")
+    CalibredbRunner(env).set_metadata(book_id, {"authors": ["Someone Else"]})
+    server._get_library()._enricher = _EnrichFake(
+        None,
+        candidates=[SearchCandidate("/works/OL2W", "Dune", ["Frank Herbert"], None)],
+    )
+
+    result = _call("enrich_missing", {})
+
+    assert result["summary"]["no_confident_match"] == 1
+    assert result["results"][0]["status"] == "no_confident_match"
+    assert result["results"][0]["match"]["work_key"] == "/works/OL2W"
+    assert "proposed" not in result["results"][0]
 
 
 @pytest.mark.e2e
