@@ -46,9 +46,11 @@ I can tell whether the "every book has a cover" gate holds and act on the books 
 1. **COVCOV-01** — WHEN `library_stats` is read THEN `metadata_completeness.cover` SHALL be
    `{"filled": <books with has_cover = 1>, "pct": round(100 * filled / books, 1)}`.
    *Verification:* integration test on a scratch library with covered + uncovered books. *Priority:* Required.
-2. **COVCOV-02** — WHEN some books have no cover THEN `data_quality.missing_cover_ids` SHALL list
-   their ids in ascending order, at most 50 of them. *Verification:* integration test (exact list;
-   cap asserted with 51+ uncovered books). *Priority:* Required.
+2. **COVCOV-02** — WHEN some books have no cover THEN `missing_cover_ids` (reader:
+   `data_quality`; resource payload: `data_quality_flags`) SHALL list their ids in ascending order,
+   at most 50 of them. *Verification:* integration test (exact list; the cap value 50 is pinned and
+   the capping behavior is exercised with a lowered cap — *[revised after Verifier round 1]*).
+   *Priority:* Required.
 3. **COVCOV-03** — WHEN the library is empty THEN `cover` SHALL be `{"filled": 0, "pct": 0.0}` and
    `missing_cover_ids` SHALL be `[]` (no error). *Verification:* integration test. *Priority:* Required.
 4. **COVCOV-04** — WHEN the `calibre://library/stats` resource is read THEN the payload SHALL carry
@@ -75,4 +77,5 @@ external call).
 
 ## Success Criteria
 
-- [ ] On the real library, the stats resource reports 192/194 covered and lists the 2 missing ids.
+- [x] On the real library, the stats resource reports 192/194 covered and lists the 2 missing ids
+      (read directly with `SqliteReader` on 2026-10-01: `{filled: 192, pct: 99.0}`, `[53, 184]`).

@@ -591,8 +591,11 @@ def test_library_stats_reports_cover_coverage_and_missing_ids(
 def test_library_stats_missing_cover_ids_are_capped(
     scratch_library: Path, monkeypatch
 ):
-    # COVCOV-02: the list is bounded (first N by id); the full count still
-    # comes from metadata_completeness.cover.
+    # COVCOV-02: the list is bounded at 50 ids (first N by id); the full count
+    # still comes from metadata_completeness.cover. The spec's cap is pinned
+    # first; the capping behavior is then exercised at 2 to avoid seeding 51
+    # books through calibredb.
+    assert sqlite_reader_module.MISSING_COVER_IDS_CAP == 50
     monkeypatch.setattr(sqlite_reader_module, "MISSING_COVER_IDS_CAP", 2)
     ids = [_seed_empty_book(scratch_library, f"No Cover {n}") for n in range(3)]
     reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
