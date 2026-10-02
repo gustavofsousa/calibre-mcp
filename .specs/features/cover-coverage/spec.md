@@ -68,12 +68,12 @@ external call).
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| COVCOV-01 | P1 | Execute | Implementing |
-| COVCOV-02 | P1 | Execute | Implementing |
-| COVCOV-03 | P1 | Execute | Implementing |
-| COVCOV-04 | P1 | Execute | Implementing |
+| COVCOV-01 | P1 | Execute | Verified |
+| COVCOV-02 | P1 | Execute | Verified |
+| COVCOV-03 | P1 | Execute | Verified |
+| COVCOV-04 | P1 | Execute | Verified |
 
-**Coverage:** 4 total.
+**Coverage:** 4 total, 4 Verified (independent Verifier PASS round 2, 5/5 mutants killed — `validation.md`).
 
 ## Success Criteria
 

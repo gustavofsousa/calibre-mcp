@@ -43,7 +43,7 @@ token — so the match must be scored, and only a confident one may become a pro
 | A6 | Which candidate is "best" | highest confidence rank, ties broken by `title_similarity + author_similarity`, then Open Library's own order | Deterministic and explainable | y (agent default) |
 | A7 | Search breadth | title + primary author, at most 5 results; if that returns nothing and an author was sent, retry once with title only | Probe: author spelling differs across catalogs ("Papa Francisco" vs "Pope Francis") | y (agent default) |
 | A8 | ISBN-less batch candidates | non-blank title AND (missing `comments` OR no cover) — only what search can propose | Avoids network calls that can only end in `no_new_data` | y (agent default) |
-| A9 | "Usable ISBN" when the stored value is junk (e.g. `---`) | Single book: the facade normalizes it to empty → search fallback. Batch selection treats any non-blank `isbn` as the ISBN path, so such a book is swept as an ISBN candidate and folds into `no_record` (the residual AD-027 already documents) — it is not re-routed to search | Rare data error; keeping the SQL rule identical to `_stats_completeness`/AD-027 beats a second normalization in SQL. *[added after Verifier round 1]* | y (agent default) |
+| A9 | "Usable ISBN" when the stored value is junk (e.g. `---`) | Single book: the facade normalizes it to empty → search fallback. Batch selection treats any non-blank `isbn` as the ISBN path: such a book is swept only if it lacks comments/publisher/pubdate, and then folds into `no_record` (the residual AD-027 already documents); it is never re-routed to search, and with complete text fields it is not swept at all | Rare data error; keeping the SQL rule identical to `_stats_completeness`/AD-027 beats a second normalization in SQL. *[added after Verifier round 1]* | y (agent default) |
 
 **Superseded requirements (explicit, per user decision A1/A2):** `LOOKUP-02` ("no ISBN → no network
 call") is **revised** to "no ISBN **and** no usable title → no network call"; `ENRICH3-01`
@@ -180,20 +180,22 @@ description; the same book with author "Unknown" → `found: false, "no confiden
 
 | Requirement ID | Story | Phase | Status |
 | --- | --- | --- | --- |
-| TSEARCH-01 | P1 single-book | Design | Pending |
-| TSEARCH-02 | P1 single-book | Design | Pending |
-| TSEARCH-03 | P1 single-book | Design | Pending |
-| TSEARCH-04 | P1 single-book | Design | Pending |
-| TSEARCH-05 | P1 single-book | Design | Pending |
-| TSEARCH-06 | P1 single-book (revises LOOKUP-02) | Design | Pending |
-| TSEARCH-07 | P1 single-book | Design | Pending |
-| TSEARCH-08 | P1 single-book | Design | Pending |
-| TSEARCH-09 | P1 batch (revises ENRICH3-01) | Design | Pending |
+| TSEARCH-01 | P1 single-book | Execute | Verified |
+| TSEARCH-02 | P1 single-book | Execute | Verified |
+| TSEARCH-03 | P1 single-book | Execute | Verified |
+| TSEARCH-04 | P1 single-book | Execute | Verified |
+| TSEARCH-05 | P1 single-book | Execute | Verified |
+| TSEARCH-06 | P1 single-book (revises LOOKUP-02) | Execute | Verified |
+| TSEARCH-07 | P1 single-book | Execute | Verified |
+| TSEARCH-08 | P1 single-book | Execute | Verified |
+| TSEARCH-09 | P1 batch (revises ENRICH3-01) | Execute | Verified |
 
-**Coverage:** 9 total.
+**Coverage:** 9 total, 9 Verified (independent Verifier PASS round 2, 20/20 mutants killed — `validation.md`).
 
 ## Success Criteria
 
-- [ ] A dry run of `enrich_missing` over the real library (read-only) reports more `proposed`
-      results than the ISBN-only baseline of 2.
-- [ ] No non-`high` match appears as `proposed` anywhere.
+- [x] A dry run of `enrich_missing` over the real library (read-only, 2026-10-01) reports more
+      `proposed` results than the ISBN-only baseline of 2: **4** (3 ISBN + 1 search), with 13
+      `no_new_data` (10 of them confident search matches whose Open Library work has no
+      description) — met, but far from moving the v0.4 KPI (see `ROADMAP.md`).
+- [x] No non-`high` match appears as `proposed` anywhere (38 `no_confident_match` in the dry run).

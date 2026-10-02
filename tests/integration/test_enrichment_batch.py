@@ -450,7 +450,7 @@ def test_high_match_without_description_on_a_covered_book_is_no_new_data(
             ]
         },
     )
-    enricher.fetch_work_description = lambda work_key: None  # type: ignore[method-assign]
+    enricher.fetch_work_description = lambda work_key: None  # work has none
     facade._enricher = enricher
 
     result = facade.enrich_missing()
