@@ -336,7 +336,13 @@ class CalibreLibrary:
         total, candidate_ids = self._reader.enrichable_candidates(
             effective_limit, offset
         )
-        summary = {"proposed": 0, "no_new_data": 0, "no_record": 0, "error": 0}
+        summary = {
+            "proposed": 0,
+            "no_new_data": 0,
+            "no_record": 0,
+            "no_confident_match": 0,
+            "error": 0,
+        }
         results: list[dict[str, Any]] = []
         for book_id in candidate_ids:  # sequential, each with LOOKUP-10's own bound
             try:
@@ -385,11 +391,15 @@ class CalibreLibrary:
         """Bucket a successful ``enrich_from_identifier`` result (ENRICH3-02/03).
 
         ``no_record`` when the source returned nothing (``found`` false, folding
-        the rare non-normalizable-ISBN negative); ``proposed`` when there is
+        the rare non-normalizable-ISBN negative); ``no_confident_match`` when a
+        title/author search found only a non-``high`` match (ENRICH-04,
+        TSEARCH-09 — shown, never proposed); ``proposed`` when there is
         something to fill (a non-empty ``proposed`` or a downloadable ``cover``);
         ``no_new_data`` when found but the record offered no missing value.
         """
         if not payload.get("found"):
+            if payload.get("reason") == "no confident match":
+                return "no_confident_match"
             return "no_record"
         if payload.get("proposed") or payload.get("cover") is not None:
             return "proposed"

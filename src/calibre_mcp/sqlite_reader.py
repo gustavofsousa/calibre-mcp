@@ -201,25 +201,40 @@ class SqliteReader:
     def enrichable_candidates(
         self, limit: int, offset: int
     ) -> tuple[int, list[int]]:
-        """Return ``(total_count, page_ids)`` of the enrichment candidates (ENRICH3-01).
+        """Return ``(total_count, page_ids)`` of the enrichment candidates.
 
-        A candidate carries a non-blank ``isbn`` identifier (so an Open Library
-        lookup is possible at all) AND is missing at least one enrichable field:
-        ``comments`` (no non-blank row), ``publisher`` (no ``books_publishers_link``
-        row), or ``pubdate`` (NULL or the ``0101-01-01%`` placeholder). These are
-        the SAME "missing" rules ``_stats_completeness`` uses — one business rule,
-        no drift. ``total_count`` is every matching book (for the host to tell more
+        Two kinds of candidate, matching the two lookup paths:
+
+        - **ISBN** (ENRICH3-01): a non-blank ``isbn`` identifier AND a missing
+          ``comments`` (no non-blank row), ``publisher`` (no
+          ``books_publishers_link`` row) or ``pubdate`` (NULL or the
+          ``0101-01-01%`` placeholder) — the SAME "missing" rules
+          ``_stats_completeness`` uses, one business rule, no drift.
+        - **Search** (ENRICH-04, TSEARCH-09): no usable ``isbn``, a usable title
+          (not blank, not Calibre's ``Unknown`` placeholder) AND missing
+          ``comments`` or a cover — the only two fields a title/author search
+          may propose, so no lookup is made that can only end in "no new data".
+
+        ``total_count`` is every matching book (for the host to tell more
         remain); ``page_ids`` is the ``id``-ordered ``LIMIT``/``OFFSET`` window.
         """
-        where = (
-            "WHERE EXISTS (SELECT 1 FROM identifiers i "
-            "WHERE i.book = b.id AND i.type = 'isbn' AND trim(i.val) != '') "
-            "AND ("
+        has_isbn = (
+            "EXISTS (SELECT 1 FROM identifiers i "
+            "WHERE i.book = b.id AND i.type = 'isbn' AND trim(i.val) != '')"
+        )
+        missing_comments = (
             "NOT EXISTS (SELECT 1 FROM comments c "
-            "WHERE c.book = b.id AND trim(c.text) != '') "
+            "WHERE c.book = b.id AND trim(c.text) != '')"
+        )
+        where = (
+            f"WHERE ({has_isbn} AND ("
+            f"{missing_comments} "
             "OR NOT EXISTS "
             "(SELECT 1 FROM books_publishers_link p WHERE p.book = b.id) "
-            "OR b.pubdate IS NULL OR b.pubdate LIKE '0101-01-01%')"
+            "OR b.pubdate IS NULL OR b.pubdate LIKE '0101-01-01%')) "
+            f"OR (NOT {has_isbn} "
+            "AND trim(b.title) != '' AND trim(b.title) != 'Unknown' "
+            f"AND ({missing_comments} OR b.has_cover = 0))"
         )
         conn = self._connect()
         try:

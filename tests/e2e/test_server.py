@@ -1359,7 +1359,8 @@ def test_enrich_missing_returns_batch_proposals_as_json(env: Path):
     assert result["candidate_count"] == 2
     assert result["processed"] == 2
     assert result["summary"] == {
-        "proposed": 2, "no_new_data": 0, "no_record": 0, "error": 0
+        "proposed": 2, "no_new_data": 0, "no_record": 0,
+        "no_confident_match": 0, "error": 0,
     }
     assert {r["book_id"] for r in result["results"]} == {first, second}
     assert all(r["status"] == "proposed" for r in result["results"])
