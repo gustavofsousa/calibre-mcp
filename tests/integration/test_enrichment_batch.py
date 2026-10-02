@@ -425,3 +425,37 @@ def test_isbn_less_books_are_swept_and_only_high_matches_are_proposed(
         "error": 0,
     }
     assert _db_digest(scratch_library) == before
+
+
+@pytest.mark.integration
+def test_high_match_without_description_on_a_covered_book_is_no_new_data(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+) -> None:
+    # Spec edge case: the work has no description and the book already has a
+    # cover -> found:true with an empty proposal -> no_new_data in the batch.
+    runner = CalibredbRunner(scratch_library)
+    book = _seed_empty_book(scratch_library, "The Hobbit")
+    runner.set_metadata(book, {
+        "authors": ["J. R. R. Tolkien"],
+        "cover": str(write_cover_png(tmp_path / "c.png")),
+    })
+    enricher = _RoutingEnricher(
+        {},
+        tmp_path,
+        candidates_by_title={
+            "The Hobbit": [
+                SearchCandidate(
+                    "/works/OL1W", "The Hobbit", ["J.R.R. Tolkien"], _COVER_URL
+                )
+            ]
+        },
+    )
+    enricher.fetch_work_description = lambda work_key: None  # type: ignore[method-assign]
+    facade._enricher = enricher
+
+    result = facade.enrich_missing()
+
+    assert result["results"][0]["status"] == "no_new_data"
+    assert result["results"][0]["proposed"] == {}
+    assert result["results"][0]["cover"] is None
+    assert result["summary"]["no_new_data"] == 1

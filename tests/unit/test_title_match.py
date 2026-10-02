@@ -17,7 +17,13 @@ from __future__ import annotations
 import pytest
 
 from calibre_mcp.openlibrary_client import SearchCandidate
-from calibre_mcp.title_match import classify, normalize_title, pick_best, score
+from calibre_mcp.title_match import (
+    classify,
+    normalize_title,
+    pick_best,
+    score,
+    usable_value,
+)
 
 
 def _candidate(title: str, *authors: str, key: str = "/works/OL1W") -> SearchCandidate:
@@ -163,3 +169,15 @@ def test_pick_best_breaks_ties_by_similarity_then_source_order():
 @pytest.mark.unit
 def test_pick_best_of_no_candidates_is_none():
     assert pick_best("The Hobbit", "Tolkien", []) is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [None, "", "   ", "Unknown", " Unknown "])
+def test_blank_or_unknown_placeholder_is_not_usable(value):
+    # TSEARCH-06: a blank title/author or Calibre's "Unknown" carries nothing.
+    assert usable_value(value) is None
+
+
+@pytest.mark.unit
+def test_real_value_is_usable():
+    assert usable_value("The Hobbit") == "The Hobbit"

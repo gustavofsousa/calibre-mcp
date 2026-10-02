@@ -543,13 +543,67 @@ def test_non_high_match_is_reported_but_never_proposed(
 
     result = facade.enrich_from_identifier(book_id)
 
-    assert result["found"] is False
-    assert result["reason"] == "no confident match"
-    assert result["match"]["confidence"] == "medium"
-    assert result["match"]["work_key"] == _HOBBIT_KEY
-    assert "proposed" not in result
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no confident match",
+        "match": {
+            "method": "search",
+            "confidence": "medium",
+            "title": "The Hobbit",
+            "authors": ["J.R.R. Tolkien"],
+            "work_key": _HOBBIT_KEY,
+            "title_similarity": 1.0,
+            "author_similarity": 0.16,
+        },
+    }
     assert enricher.description_calls == []
     assert enricher.download_calls == 0
+
+
+@pytest.mark.integration
+def test_low_match_is_reported_but_never_proposed(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-04 (low branch): an unrelated best candidate is still only shown.
+    book_id = _seed_titled_book(scratch_library, "Zzz", "Someone")
+    enricher = _FakeEnricher(None, candidates=[_hobbit()], description="Theirs.")
+    facade._enricher = enricher
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no confident match",
+        "match": {
+            "method": "search",
+            "confidence": "low",
+            "title": "The Hobbit",
+            "authors": ["J.R.R. Tolkien"],
+            "work_key": _HOBBIT_KEY,
+            "title_similarity": 0.0,
+            "author_similarity": 0.3,
+        },
+    }
+    assert enricher.description_calls == []
+    assert enricher.download_calls == 0
+
+
+@pytest.mark.integration
+def test_match_similarities_are_rounded_to_two_decimals(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-02: "The Hobbits"/"J. R. R. Tolkein" vs "The Hobbit"/"J.R.R.
+    # Tolkien" scores 0.952.../0.923... -> still high, reported as 0.95/0.92.
+    book_id = _seed_titled_book(scratch_library, "The Hobbits", "J. R. R. Tolkein")
+    facade._enricher = _FakeEnricher(None, candidates=[_hobbit()], description="D.")
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result["match"]["confidence"] == "high"
+    assert result["match"]["title_similarity"] == 0.95
+    assert result["match"]["author_similarity"] == 0.92
 
 
 @pytest.mark.integration
