@@ -28,12 +28,12 @@ and published. Phase labels (`Phase N`) are kept because every spec in `.specs/f
 | v0.1 | 0 — Core curation loop | read + curate + distribute locally, safely | `catalog` `curation` `intake` `formats` `dedupe` `removal` `delivery` | ✅ closed |
 | v0.2 | 1 — Library self-knowledge | host knows the library's shape from one resource read | `catalog` | ✅ closed |
 | v0.3 | 2 — Bulk ops & organization | a full curation session never opens the Calibre GUI | `curation` `intake` `formats` `dedupe` | ✅ closed |
-| v0.4 | 3 — Covers & enrichment | completeness gaps shrink measurably; every book has a cover | `covers` `enrichment` | 🔄 features shipped, gate **not met** |
+| v0.4 | 3 — Covers & enrichment | completeness gaps shrink measurably; every book has a cover | `covers` `enrichment` `catalog` | ⚠️ closed with debt — KPI source-limited |
 | v0.5 | 4 — Library maintenance | integrity + recovery answerable from the MCP | `maintenance` `⟂ safety` | 🗓️ |
 | v0.6 | 5 — Device delivery | "curated" → "readable on my device" in one action | `delivery` | ⚪ |
 | v1.0 | — Stable & published | GUI-replacement pillar complete, installable from a registry | `— ops` | ⚪ |
 
-**Now:** close v0.4 honestly (see its gate below), then pull **MAINT-04 (metadata rollback)** —
+**Now:** v0.4 closed with debt (see its gate below) → pull **MAINT-04 (metadata rollback)** —
 the highest-value v0.5 item because it makes the safety net *usable*, not just present.
 
 ---
@@ -72,7 +72,7 @@ none of it needs the GUI. Built only on Phase 0 primitives (AD-020 batch pattern
 | ORGN-03 — `merge_duplicate_group` | `dedupe` | `merge-duplicate-group` | ✅ |
 | ORGN-04 — `rename_series` *(follow-on gap)* | `curation` | `series-rename` | ✅ |
 
-## v0.4 — Phase 3 · Covers & metadata enrichment 🔄
+## v0.4 — Phase 3 · Covers & metadata enrichment ⚠️ *(closed with debt 2026-10-01)*
 
 **Target:** a meaningful drop in `metadata_completeness` gaps after one curation session, and every
 book has a viewable cover. Introduces the first outbound network call (Open Library) — AD-026/027; covers AD-024/025.
@@ -86,26 +86,32 @@ book has a viewable cover. Introduces the first outbound network call (Open Libr
 | ENRICH-03 — `enrich_missing` batch review | `enrichment` | `enrichment-batch` | ✅ |
 | Trustworthy suite + rating-scale fix *(this PR, AD-029/030)* | `— ops` `curation` | — | ✅ |
 
-**Gate check (2026-10-01, live run against the real library — see
-[`docs/live-smoke-test.md`](docs/live-smoke-test.md)):** **not met, and not reachable with the
-shipped features alone.**
-
-- *Completeness:* `enrich_missing` found only **7 candidates in 196 books** — enrichment is
-  ISBN-keyed, and only 51 books carry an ISBN. Even a perfect run moves `comments` (26.5% filled)
-  and `publisher` (35.2%) by a few points. The gap lives in the ~145 books *without* an ISBN.
-- *Covers:* the stats resource doesn't report cover coverage at all, so "every book has a cover"
-  can't be measured yet.
-
-**To close v0.4** (both are backlog items promoted here; specs not written yet):
+**Gate check — round 1 (2026-10-01, live run, [`docs/live-smoke-test.md`](docs/live-smoke-test.md)):**
+not measurable/reachable with the ISBN path alone (7 enrichable books of 196; no cover metric).
+Two features were added to close the gap:
 
 | Feature | Domain | Spec | Status |
 | --- | --- | --- | --- |
-| STATS-02 — cover coverage in `library_stats` (count + ids without cover) | `catalog` | — | ⚪ |
-| ENRICH-04 — title/author search for books without an ISBN (proposal-only, same gate) | `enrichment` | — | ⚪ |
+| STATS-02 — cover coverage in `library_stats` | `catalog` | `cover-coverage` | ✅ |
+| ENRICH-04 — title/author search for books without an ISBN (high-confidence only, AD-032) | `enrichment` | `title-search-enrichment` | ✅ |
 
-Decision at spec-pull for ENRICH-04: a title/author match is *fuzzy* (ISBN is exact) — the proposal
-must surface the match confidence and the candidate edition, or a wrong-book enrichment becomes a
-silent bad write behind a "confirmed" token.
+**Gate check — round 2 (2026-10-01, read-only dry run of `enrich_missing` on the real library):**
+
+| Gate half | Measured | Verdict |
+| --- | --- | --- |
+| Every book has a viewable cover | **192/194 (99.0%)** — missing ids 53, 184; neither is findable on Open Library | ⚠️ 2 books need a manual `set_cover` |
+| Meaningful drop in completeness gaps | 142 candidates → **4 proposals** (3 ISBN, 1 search); applying all moves `comments` from 52 to at most 55 books | ❌ not met |
+
+**Why, with evidence:** the matcher finds the right book — 11 `high` matches, all correct — but
+**10 of those 11 Open Library works carry no description**. The gap is now *source-limited*: Open
+Library is thin for this library (PT-BR, religious, technical). 38 more books matched at `medium`
+and were (by design) not proposed.
+
+**Closure:** v0.4 is **⚠️ done with debt** — every planned feature shipped and was independently
+verified; the completeness KPI is not met because the data source lacks the data. The next lever is
+a second metadata source (Google Books — **ENRICH-05**, needs an RFD: new external dependency,
+terms of use, rate limits) or manual curation; neither blocks v0.5. Data to-do: set covers for books
+53 and 184.
 
 ## v0.5 — Phase 4 · Library maintenance 🗓️
 
@@ -167,6 +173,8 @@ by domain; that's deliberate at this size (see the backlog's tech-debt band).
 | TD — backup retention is silent | v0.1 (AD-011) | open | superseded by MAINT-04 once rollback exists |
 | ~~TD — tests sourced epubs from a personal path~~ | v0.1–v0.4 | ✅ paid (AD-029) | — |
 | ~~Bug — `rating` written doubled~~ | v0.1 (EDIT) | ✅ fixed (AD-030) | — |
+| v0.4 KPI — completeness gap is source-limited | v0.4 | open | ENRICH-05 (second source) gets an RFD, or a manual curation session is done |
+| Full `enrich_missing` sweep takes minutes (1 req/s pacing) | v0.4 (AD-032) | open (accepted) | a host times out on a full page → lower the default `limit` |
 
 ## Out of scope (a decision not to do it — not "not yet")
 

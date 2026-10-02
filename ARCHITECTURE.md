@@ -182,7 +182,7 @@ field-by-field before/after diff. A few read-only tests can also target a real l
 
 ## Decision log
 
-The full, dated decision record (`AD-001` … `AD-030`) lives in
+The full, dated decision record (`AD-001` … `AD-032`) lives in
 [`.specs/STATE.md`](.specs/STATE.md). Highlights not covered above:
 
 - **AD-002/003 — local stdio, no auth, no network surface.** The host launches the server

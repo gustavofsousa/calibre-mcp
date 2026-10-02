@@ -165,8 +165,8 @@ all logs go to stderr, on purpose (see [ARCHITECTURE.md](ARCHITECTURE.md#stdout-
 | `set_cover` | Set a book's cover from a local image file (replace vs. add shown in the plan). | plan → confirm |
 | `merge_duplicate_group` | Fold duplicate records into a survivor you choose — formats only, losers recoverably deleted. | plan → confirm (batch) |
 | **Enrich** *(outbound network — see below)* | | |
-| `enrich_from_identifier` | Propose missing description/publisher/pubdate/cover for one book from its ISBN. Writes nothing. | read-only proposal |
-| `enrich_missing` | Bounded sweep (default 25, max 100) proposing gap-fills for incomplete books with an ISBN. Writes nothing. | read-only proposal |
+| `enrich_from_identifier` | Propose missing metadata/cover for one book: by ISBN, or — without one — by title/author search (only a high-confidence match is proposed). Writes nothing. | read-only proposal |
+| `enrich_missing` | Bounded sweep (default 25, max 100) proposing gap-fills for incomplete books, with or without an ISBN. Writes nothing. | read-only proposal |
 | **Add & convert** | | |
 | `add_book` | Add a book from a local file path; surfaces duplicates honestly. | single-step (backed up) |
 | `import_folder` | Recursively import every ebook file found under a directory. | additive (backed up) |
@@ -179,14 +179,18 @@ all logs go to stderr, on purpose (see [ARCHITECTURE.md](ARCHITECTURE.md#stdout-
 **Enrichment applies through the normal gates.** The `enrich_*` tools only *propose*; you apply a
 proposal by feeding it to `update_metadata` (and its downloaded cover to `set_cover`), each behind
 its own plan → confirm. They are the only tools that touch the network: they send the book's
-**ISBN** to the [Open Library API](https://openlibrary.org/developers/api) (no key, no account).
+**ISBN** — or, for a book without one, its **title and author** — to the
+[Open Library API](https://openlibrary.org/developers/api) (no key, no account), paced to one
+request per second. A title/author match is scored deterministically and only proposed when title
+*and* author agree; the result shows which work matched, so you can check it before applying.
 Every other tool is fully local.
 
 **`rating` uses Calibre's stored 0–10 scale** (0–5 stars × 2, so `8` = ★★★★). Odd values are half
 stars.
 
 Plus one MCP **resource**, `calibre://library/stats` — an aggregate library profile (totals,
-format/language mix, metadata completeness, data-quality flags) readable without any tool call.
+format/language mix, metadata completeness including cover coverage, data-quality flags such as
+duplicate groups and books without a cover) readable without any tool call.
 
 Every tool's full contract (edge cases, error conditions, exact field whitelist) is documented in
 its docstring in [`server.py`](src/calibre_mcp/server.py) — those docstrings are what the LLM host
@@ -219,6 +223,7 @@ src/calibre_mcp/
 ├── ebook_convert_runner.py  # ebook-convert subprocess wrapper
 ├── calibre_smtp_runner.py   # calibre-smtp subprocess wrapper
 ├── openlibrary_client.py    # Open Library HTTP client (the only network call site)
+├── title_match.py           # pure title/author match scoring for ISBN-less enrichment
 ├── backup.py                # metadata.db snapshots + recoverable trash
 ├── confirmation.py          # plan→confirm token derivation/verification
 ├── bulk_edit.py             # pure list_mode (add/remove/replace) resolution for bulk edits
@@ -235,8 +240,8 @@ Shipped: the full read → curate → organize → enrich → distribute loop ab
 three short docs:
 
 - [`ROADMAP.md`](ROADMAP.md) — **tactical**: which feature ships in which version, phase gates,
-  debt. Next up: closing v0.4 (cover coverage + enrichment for books without an ISBN), then
-  **metadata rollback** (restore any of the automatic `metadata.db` backups from the MCP).
+  debt. Next up: **metadata rollback** (restore any of the automatic `metadata.db` backups from
+  the MCP).
 - [`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md) — **strategic**: what the project is for and the
   gated bets beyond it.
 - [`BACKLOG.md`](BACKLOG.md) — the unsequenced pool of ideas, by domain.

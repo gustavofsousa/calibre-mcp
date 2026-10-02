@@ -253,6 +253,25 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   business risks), `BACKLOG.md` (unsequenced ideas by domain, evidence-tagged). Phase labels are
   kept in the tactical roadmap because every spec cites them.
 
+- **AD-032 — ISBN-less enrichment searches by title/author; only a confident match proposes; requests
+  are paced.** Confirmed 2026-10-01 (ENRICH-04, `title-search-enrichment`; user decisions A1/A2).
+  **Context:** only 51/194 books carry an ISBN, so ENRICH-01..03 reached 7 books. **Decision:**
+  (1) `enrich_from_identifier` falls back to Open Library *search* (title + primary author, ≤5 works,
+  one title-only retry) when there is no usable ISBN — same tool, plus a `match` block; (2) a
+  deterministic matcher (`title_match.py`, stdlib `difflib`, no LLM per AD-006) scores candidates —
+  `high` needs title ≥ 0.90 **and** author ≥ 0.85, never without a usable book author; (3) only a
+  `high` match proposes, and only work-level fields (description → `comments`, cover) — never
+  publisher/pubdate, which are edition-specific; (4) `enrich_missing` sweeps ISBN-less books
+  missing comments or a cover, with a new `no_confident_match` bucket; (5) every Open Library
+  request is paced to ≥ 1 s apart, per its documented limit for unidentified clients (the client had
+  no pacing before). **Supersedes** LOOKUP-02 (no ISBN → no network; now: no ISBN *and* no usable
+  title) and ENRICH3-01 (candidates need an ISBN). Extends AD-026/027 (still one HTTP module,
+  still a bounded read-only sweep). **Consequences — measured on the real library (read-only dry
+  run, metadata.db hash unchanged):** 142 candidates → 4 `proposed` (3 ISBN, 1 search), 13
+  `no_new_data`, 87 `no_record`, 38 `no_confident_match`, 0 errors. The matcher finds the right book
+  (11 `high`, all correct), but **10 of those 11 Open Library works have no description** — the
+  completeness gap is now *source-limited*, not lookup-limited. A full sweep takes minutes at 1 req/s.
+
 ## Backlog — deferred (post-P2)
 
 - Moved to [`BACKLOG.md`](../BACKLOG.md) (AD-031) — this section is no longer maintained.
@@ -422,11 +441,13 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   identical field by field afterwards. Gate **not met and not reachable with the shipped features**:
   `enrich_missing` has 7 candidates in 196 books (only 51 carry an ISBN), and stats can't measure
   cover coverage. Found + fixed the rating bug (AD-030); fixed the silently-skipping suite (AD-029).
-- **Next:** close v0.4 with STATS-02 (cover coverage) + ENRICH-04 (title/author lookup for books
-  without an ISBN — decide match-confidence surfacing at Specify), or consciously close v0.4 as-is
-  and pull **MAINT-04 (metadata rollback)**. See `ROADMAP.md`. Also high in `BACKLOG.md`: the
-  confirmation token binds the request, not the reviewed state, never expires and is computable by
-  the host — worth an AD before MAINT-04 reuses it.
+- **v0.4 closed with debt (2026-10-01):** STATS-02 (`cover-coverage`) + ENRICH-04
+  (`title-search-enrichment`, AD-032) shipped; independent Verifier reports in each feature's
+  `validation.md`. Gate round 2 on the real library: covers 192/194 (ids 53, 184 not on Open
+  Library); completeness KPI **not met** — 4 proposals from 142 candidates, source-limited (10 of 11
+  confident matches have no description). Debt rows in `ROADMAP.md`.
+- **Next:** **MAINT-04 (metadata rollback)**, v0.5. Before reusing the confirmation token there, decide
+  (AD) the token-binding issue in `BACKLOG.md` (⟂ safety). ENRICH-05 (second source) needs an RFD.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),

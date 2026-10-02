@@ -30,8 +30,7 @@ Items already sequenced carry their version: `(v0.4)`. Evidence tags: **[live]**
 
 ### catalog — search, list, view, stats
 - **Mature:**
-  - STATS-02 — cover coverage in `library_stats` (count + ids without a cover) (v0.4) ⚪ — today the
-    v0.4 gate "every book has a cover" can't even be measured **[live]**.
+  - ✅ STATS-02 — cover coverage in `library_stats` (v0.4) — 192/194 covered; missing ids 53, 184.
   - `list_books` filter by missing field (`missing="publisher"`) — turns the stats percentages into a
     worklist without the host paging 196 books ⚪.
   - `search_books` pagination (`limit`/`offset`) — it returns every match today; a broad query on a
@@ -95,15 +94,23 @@ Items already sequenced carry their version: `(v0.4)`. Evidence tags: **[live]**
 
 ### enrichment — external metadata proposals
 - **Mature:**
-  - ENRICH-04 — title/author search for books **without** an ISBN (v0.4) ⚪ — the ISBN path reached
-    7 of 196 books **[live]**. Must surface match confidence + the candidate edition.
+  - ✅ ENRICH-04 — title/author search for books without an ISBN (v0.4, AD-032). Dry run on the real
+    library: 11 confident matches, but only 1 had a description **[live]**.
+  - **ENRICH-05 — a second source (Google Books) behind the same proposal contract** ⚪ — the v0.4
+    KPI is now *source-limited*: Open Library lacks descriptions for 10 of 11 confidently matched
+    books **[live]**. Needs an RFD (new external dependency, terms of use, quota).
+  - Let the user pick among the top-3 candidates for `medium` matches — 38 books sit there **[live]**.
+  - Propose the matched edition's ISBN (needs editable `identifiers` — see `curation`), so later
+    lookups become exact.
   - Fill `languages` (110 books unset **[live]**) — detect from the book text locally, no network.
   - Propose tags from Open Library `subjects` (proposal-only).
-- **New / Vision:** a second source (Google Books) behind the same proposal contract · a source
-  that covers Brazilian editions better **[hyp]** (the library is PT-BR heavy; Open Library coverage
-  of BR ISBNs looks thin).
-- **Decision at spec-pull:** cache Open Library responses (and for how long)? Send a descriptive
-  `User-Agent` per Open Library's API etiquette?
+- **New / Vision:** a source that covers Brazilian editions better — confirmed thin on Open Library
+  for this library **[live]**.
+- **Decision at spec-pull:** cache Open Library responses (and for how long)? Identify the client
+  with a contact e-mail in the `User-Agent` (Open Library then allows 3 req/s instead of 1)? —
+  pacing itself is ✅ done (AD-032).
+- **Tech debt:** a full `enrich_missing` sweep takes minutes at 1 req/s (AD-032) — fine for one
+  user; lower the default `limit` if a host's tool timeout cuts it.
 
 ## Support
 
@@ -167,5 +174,7 @@ Found during the 2026-10-01 live run; doable today with the shipped tools:
 
 - Resolve 2 duplicate groups — ids **196/209** ("APOSTILA MÓDULO 4.2") and **68/132** ("A fé
   explicada") via `merge_duplicate_group`.
-- Apply the 2 `enrich_missing` proposals (books 84 and 98) via `update_metadata`.
+- Apply the 4 `enrich_missing` proposals (books 84, 98, 110, 205) via
+  `update_metadata`.
+- Set covers by hand for books **53** and **184** (the only two without one; not on Open Library).
 - Fix the 23 `Unknown`-author books and the 74 placeholder pubdates.
