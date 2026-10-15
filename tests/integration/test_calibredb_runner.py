@@ -27,15 +27,12 @@ from calibre_mcp.errors import (
     LibraryLockedError,
 )
 from calibre_mcp.sqlite_reader import SqliteReader
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path) -> Path:
-    """Copy one real .epub into a temp path (reading the real library is safe)."""
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if not sources:
-        pytest.skip("no sample .epub available in the real library")
+    """Copy one synthetic sample .epub into a temp path."""
+    sources = sample_epub_sources()
     dest = tmp_path / "sample.epub"
     shutil.copy2(sources[0], dest)
     return dest
@@ -117,6 +114,24 @@ def test_set_metadata_authors_stay_distinct_not_mashed(
         result.book_id
     )
     assert book.authors == ["Author One", "Author Two"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("rating", [2, 7, 8, 10])
+def test_set_metadata_rating_round_trips_on_the_0_to_10_scale(
+    runner, scratch_library, tmp_path, rating
+):
+    # EDIT-07: the tool contract and the reader both speak Calibre's stored 0-10
+    # scale, but `calibredb set_metadata --field rating:N` takes STARS (0-5) and
+    # stores N*2 -- passing the 0-10 value through doubled it (8 -> 10).
+    result = runner.add(_sample_epub(tmp_path))
+
+    runner.set_metadata(result.book_id, {"rating": rating})
+
+    book = SqliteReader(scratch_library / "metadata.db", scratch_library).get_book(
+        result.book_id
+    )
+    assert book.rating == rating
 
 
 @pytest.mark.integration

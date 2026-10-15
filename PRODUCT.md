@@ -1,25 +1,24 @@
 # Product
 
-What calibre-mcp is *for*, who it serves, and what it does today. For how it's built, see
-[ARCHITECTURE.md](ARCHITECTURE.md); for what's next and why, see
-[`.specs/ROADMAP.md`](.specs/ROADMAP.md).
+This page says what calibre-mcp is *for*, who it serves and what it does today. For how it works,
+read [ARCHITECTURE.md](ARCHITECTURE.md). For what comes next and why, read [`ROADMAP.md`](ROADMAP.md).
 
 ## The pitch
 
-Managing an ebook library today means clicking around the Calibre desktop GUI: opening dialogs to
-edit metadata, right-clicking to convert a format, hunting for duplicates by eye. calibre-mcp turns
-that into a conversation. Point an MCP-compatible LLM host (Claude Desktop, Claude Code, or any
-other MCP client) at your library, and it can search, edit, curate, organize, convert, and send
-your books the way you'd ask a librarian to — while a human stays in the loop on anything that
-changes or leaves the machine.
+Today, to manage an ebook library, you click around the Calibre desktop GUI. You open dialogs to
+edit metadata, right-click to convert a format and look for duplicates by eye. calibre-mcp turns
+that work into a conversation. Connect an MCP-compatible LLM host (Claude Desktop, Claude Code or any
+other MCP client) to your library. The host can then search, edit, curate, organize, convert and send
+your books, as you ask a librarian to. A human approves each action that changes data or sends data
+off the machine.
 
 ## Who it's for
 
-One person, one library. calibre-mcp is a **personal tool, built to a professional bar** (AD-018):
-no multi-tenant concerns, no packaging/distribution effort — but also no shortcuts on safety or
-correctness, because it's trusted with the only copy of a library that took years to curate. It
-doubles as a portfolio piece: a concrete answer to "how do you design a tool that's allowed to
-delete a user's files," not just a toy integration.
+One person, one library. calibre-mcp is a **personal tool, built to a professional bar** (AD-018).
+It has no multi-tenant concerns and no packaging or distribution effort. But it takes no shortcuts on
+safety or correctness: it holds the only copy of a library that took years to curate. It is also a
+portfolio piece. It gives a concrete answer to "how do you design a tool that can delete the files
+of a user". It is not a toy integration.
 
 ## Product principles
 
@@ -32,8 +31,8 @@ delete a user's files," not just a toy integration.
 
 ## Capability map
 
-Each phase below is a slice of "things you currently need the Calibre GUI for." Phase 0 and 1 are
-shipped; Phase 2 is in progress; Phases 3–5 are scoped but not yet built.
+Each phase below is a slice of "things you need the Calibre GUI for today". The diagram shows the
+original plan. The [roadmap table](#roadmap-at-a-glance) below has the current status.
 
 ```mermaid
 flowchart TD
@@ -84,7 +83,7 @@ flowchart TD
 
 ## What you can do today
 
-**Discover & inspect** — read-only, never blocked by the Calibre GUI holding the library open:
+**Discover & inspect** — read-only. A library held open by the Calibre GUI never blocks it:
 
 | Capability | Tool |
 | --- | --- |
@@ -93,7 +92,7 @@ flowchart TD
 | Look up one book's full record | `get_book` |
 | See totals, format/language mix, and what's incomplete without paging through books | `calibre://library/stats` resource |
 
-**Curate a single book** — every change is reviewed before it happens:
+**Curate a single book** — you review each change before it happens:
 
 | Capability | Tool | Reviewed first? |
 | --- | --- | --- |
@@ -103,7 +102,7 @@ flowchart TD
 | Remove a book — recoverably, never a hard delete | `remove_book` | Yes |
 | Email a book's best-matching format to someone | `email_book` | Yes |
 
-**Curate at scale** — the same guarantees, applied to many books in one call:
+**Curate at scale** — the same guarantees, for many books in one call:
 
 | Capability | Tool |
 | --- | --- |
@@ -119,8 +118,9 @@ flowchart TD
 
 ## The trust model, in plain terms
 
-An LLM host acting on your library needs guardrails a human would apply instinctively. calibre-mcp
-makes each one explicit and mechanical rather than relying on the model "being careful":
+An LLM host that acts on your library needs the guardrails that a human applies by instinct.
+calibre-mcp makes each guardrail explicit and mechanical. It does not trust the model to "be
+careful":
 
 ```mermaid
 flowchart LR
@@ -132,18 +132,18 @@ flowchart LR
     E --> F["Removed books go to a<br/>recoverable trash, never<br/>a permanent delete"]
 ```
 
-Four guarantees back that flow, described in implementation depth in
-[ARCHITECTURE.md#safety-mechanisms](ARCHITECTURE.md#safety-mechanisms):
+Four guarantees support that flow. [ARCHITECTURE.md#safety-mechanisms](ARCHITECTURE.md#safety-mechanisms)
+describes the implementation:
 
-1. **Nothing destructive or outward-facing happens without a review step.** Editing, removing, and
-   emailing all show you a plan first; nothing is written or sent until you approve that exact plan.
-2. **Every mutation is preceded by a backup**, so a wrong or regretted change (including a bulk one)
-   always has a rollback point.
-3. **Deleting a book is always recoverable** — the files are kept, not just moved to Calibre's own
-   recycle bin.
-4. **A partial failure is always reported honestly.** A bulk operation on 40 books where 3 fail
-   never says "all succeeded," and never silently drops the 3 — every book lands in a named bucket
-   (applied/failed, converted/skipped/failed, added/duplicate/failed) you can read.
+1. **Nothing destructive or outward-facing happens without a review step.** Edit, remove and email
+   all show you a plan first. Nothing is written or sent until you approve that exact plan.
+2. **A backup comes before each change.** So a wrong change, or one you regret (bulk too), always
+   has a rollback point.
+3. **A deleted book is always recoverable.** The server keeps the files. It does not only move them
+   to the Calibre recycle bin.
+4. **The server always reports a partial failure honestly.** If 3 of 40 books fail in a bulk
+   operation, it never says "all succeeded" and never drops the 3 in silence. Each book goes into a
+   named bucket that you can read (applied/failed, converted/skipped/failed, added/duplicate/failed).
 
 ## Roadmap at a glance
 
@@ -151,14 +151,14 @@ Four guarantees back that flow, described in implementation depth in
 | --- | --- | --- |
 | 0 — Core Curation Loop | Search, edit, add, remove, convert, dedupe, email | Shipped |
 | 1 — Library Self-Knowledge | Stats resource: completeness, mix, data-quality flags | Shipped |
-| 2 — Bulk Ops & Organization | Bulk edit/convert/import shipped; author/tag rename + duplicate merge next | In progress |
-| 3 — Covers & Enrichment | Cover read/write, identifier-based metadata lookup (first outbound network call) | Planned |
-| 4 — Library Maintenance | Integrity check, restore, export | Planned |
+| 2 — Bulk Ops & Organization | Bulk edit/convert/import, author/tag/series rename, duplicate merge | Shipped |
+| 3 — Covers & Enrichment | Cover read/write, ISBN-based metadata proposals (first outbound network call) | Shipped; phase gate open (books without an ISBN) |
+| 4 — Library Maintenance | Metadata rollback, integrity check, restore, export | Next |
 | 5 — Distribution | Direct e-reader copy | Planned |
 
-Full phase-gates, candidate features, and sequencing rationale live in
-[`.specs/ROADMAP.md`](.specs/ROADMAP.md); the dated decision record behind each choice is in
-[`.specs/STATE.md`](.specs/STATE.md).
+The full phase gates, candidate features and sequence rationale live in [`ROADMAP.md`](ROADMAP.md).
+The strategy lives in [`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md). The dated decision record behind
+each choice is in [`.specs/STATE.md`](.specs/STATE.md).
 
 ## Deliberately out of scope
 

@@ -40,14 +40,11 @@ from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.config import Config
 from calibre_mcp.errors import CalibredbError, ConfirmationError, InvalidInputError
 from calibre_mcp.library import CalibreLibrary
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path, name: str, index: int = 0) -> Path:
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) <= index:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[index], dest)
     return dest

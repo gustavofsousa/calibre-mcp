@@ -15,6 +15,10 @@ from typing import Any
 
 from .errors import BookNotFoundError, InvalidInputError
 
+# STATS-02: the uncovered ids listed in the stats snapshot are bounded so the
+# payload stays small on a large library; the full count is the completeness row.
+MISSING_COVER_IDS_CAP = 50
+
 
 @dataclass
 class LibraryStats:
@@ -194,6 +198,57 @@ class SqliteReader:
             conn.close()
         return [r["book"] for r in rows]
 
+    def enrichable_candidates(
+        self, limit: int, offset: int
+    ) -> tuple[int, list[int]]:
+        """Return ``(total_count, page_ids)`` of the enrichment candidates.
+
+        Two kinds of candidate, matching the two lookup paths:
+
+        - **ISBN** (ENRICH3-01): a non-blank ``isbn`` identifier AND a missing
+          ``comments`` (no non-blank row), ``publisher`` (no
+          ``books_publishers_link`` row) or ``pubdate`` (NULL or the
+          ``0101-01-01%`` placeholder) — the SAME "missing" rules
+          ``_stats_completeness`` uses, one business rule, no drift.
+        - **Search** (ENRICH-04, TSEARCH-09): no usable ``isbn``, a usable title
+          (not blank, not Calibre's ``Unknown`` placeholder) AND missing
+          ``comments`` or a cover — the only two fields a title/author search
+          may propose, so no lookup is made that can only end in "no new data".
+
+        ``total_count`` is every matching book (for the host to tell more
+        remain); ``page_ids`` is the ``id``-ordered ``LIMIT``/``OFFSET`` window.
+        """
+        has_isbn = (
+            "EXISTS (SELECT 1 FROM identifiers i "
+            "WHERE i.book = b.id AND i.type = 'isbn' AND trim(i.val) != '')"
+        )
+        missing_comments = (
+            "NOT EXISTS (SELECT 1 FROM comments c "
+            "WHERE c.book = b.id AND trim(c.text) != '')"
+        )
+        where = (
+            f"WHERE ({has_isbn} AND ("
+            f"{missing_comments} "
+            "OR NOT EXISTS "
+            "(SELECT 1 FROM books_publishers_link p WHERE p.book = b.id) "
+            "OR b.pubdate IS NULL OR b.pubdate LIKE '0101-01-01%')) "
+            f"OR (NOT {has_isbn} "
+            "AND trim(b.title) != '' AND trim(b.title) != 'Unknown' "
+            f"AND ({missing_comments} OR b.has_cover = 0))"
+        )
+        conn = self._connect()
+        try:
+            total = conn.execute(
+                f"SELECT COUNT(*) AS n FROM books b {where}"
+            ).fetchone()["n"]
+            rows = conn.execute(
+                f"SELECT b.id FROM books b {where} ORDER BY b.id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        finally:
+            conn.close()
+        return int(total), [r["id"] for r in rows]
+
     @staticmethod
     def _require_int(book_id: int) -> None:
         if not isinstance(book_id, int) or isinstance(book_id, bool):
@@ -340,6 +395,38 @@ class SqliteReader:
             files[row["format"]] = file_path
         return files
 
+    def cover_file(self, book_id: int) -> Path | None:
+        """Resolve a book's on-disk ``cover.jpg`` path, keyed on
+        ``books.has_cover`` (RCOVER-01..04). Cover-scoped sibling of
+        ``format_files``.
+
+        ``has_cover`` falsy -> ``None`` (no cover, a normal state). Unknown
+        id -> ``BookNotFoundError``. ``has_cover`` true but ``cover.jpg``
+        missing on disk -> ``InvalidInputError`` (metadata<->disk
+        inconsistency), mirroring ``format_files`` rather than silently
+        degrading to "no cover".
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT path, has_cover FROM books WHERE id = ?", (book_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            raise BookNotFoundError(book_id)
+        if not row["has_cover"]:
+            return None
+
+        book_path: str = row["path"]
+        cover = self._library_path / book_path / "cover.jpg"
+        if not cover.is_file():
+            raise InvalidInputError(
+                f"cover file for book {book_id} not found on disk: {cover}"
+            )
+        return cover
+
     def library_stats(self) -> LibraryStats:
         """Compute the aggregate baseline profile of the library (STATS-01).
 
@@ -445,6 +532,9 @@ class SqliteReader:
             "rating": conn.execute(
                 "SELECT COUNT(DISTINCT book) AS n FROM books_ratings_link"
             ).fetchone()["n"],
+            "cover": conn.execute(
+                "SELECT COUNT(*) AS n FROM books WHERE has_cover = 1"
+            ).fetchone()["n"],
         }
         return {
             field: {"filled": filled, "pct": pct(filled)}
@@ -504,11 +594,19 @@ class SqliteReader:
         rating_used = conn.execute(
             "SELECT COUNT(*) AS n FROM books_ratings_link"
         ).fetchone()["n"]
+        missing_cover_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM books WHERE has_cover = 0 ORDER BY id LIMIT ?",
+                (MISSING_COVER_IDS_CAP,),
+            )
+        ]
         return {
             "unknown_author_books": unknown_author_books,
             "placeholder_pubdate_0101": placeholder_pubdate,
             "series_unused": series_used == 0,
             "rating_unused": rating_used == 0,
+            "missing_cover_ids": missing_cover_ids,
         }
 
     def find_duplicate_groups(self) -> list[list[Book]]:

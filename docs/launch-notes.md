@@ -1,6 +1,6 @@
 # Launch notes — calibre-mcp (DRAFT — not posted)
 
-> Working draft for the Phase A launch (see `.specs/ROADMAP.md → Strategic Horizon → Phase A`).
+> Working draft for the Phase A launch (see `ROADMAP-STRATEGY.md → Phase A`).
 > Posting anywhere is a checkpointed one-way door — do not publish without an explicit go.
 
 ## Positioning (the one line)

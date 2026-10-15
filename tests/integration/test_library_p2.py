@@ -43,15 +43,12 @@ from calibre_mcp.errors import (
     SmtpNotConfiguredError,
 )
 from calibre_mcp.library import CalibreLibrary
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _sample_epub(tmp_path: Path, name: str = "sample.epub", index: int = 0) -> Path:
-    """Copy one real .epub into a temp path (reading the real library is safe)."""
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) <= index:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    """Copy one synthetic sample .epub into a temp path."""
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[index], dest)
     return dest
