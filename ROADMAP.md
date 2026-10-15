@@ -1,7 +1,7 @@
 # Roadmap (tactical) — calibre-mcp
 
 > **What this doc is.** The *delivery* pipeline: which Feature ships in which version, what each
-> phase must prove, and what debt it left behind. Revised per feature (it moves every PR or two).
+> phase must prove, and what debt it left behind. Revise it per feature (it changes every PR or two).
 >
 > **Division of labor** — three docs, three questions, no overlap:
 >
@@ -11,9 +11,9 @@
 > | **`ROADMAP.md`** (this) | **In what order** it ships — versions, features, phase-gates, debt | per feature |
 > | [`BACKLOG.md`](BACKLOG.md) | **What it could become** — the unsequenced pool of ideas, by domain | whenever an idea shows up |
 >
-> **Invariant:** nothing enters this pipeline without first living in the backlog and earning a
-> version. The dated decision log (`AD-NNN`) and per-feature handoff live in
-> [`.specs/STATE.md`](.specs/STATE.md); each Feature's spec lives in `.specs/features/<feature>/`.
+> **Invariant:** an item enters this pipeline only after it lives in the backlog and earns a
+> version. The dated decision log (`AD-NNN`) and the per-feature handoff live in
+> [`.specs/STATE.md`](.specs/STATE.md). The spec of each Feature lives in `.specs/features/<feature>/`.
 
 **Status:** ✅ done · ⚠️ done with debt · 🔄 in progress · 🗓️ planned · ⚪ no spec · 🔒 blocked
 **SemVer:** MINOR (`0.x`) = a phase of the GUI-replacement pillar · `1.0` = the pillar is complete

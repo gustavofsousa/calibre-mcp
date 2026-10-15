@@ -1,9 +1,9 @@
 # Architecture
 
-How calibre-mcp is built, and why. The interesting parts for a portfolio read are
-[Safety mechanisms](#safety-mechanisms) and the [decision log](#decision-log) — they show the
-trade-offs behind an MCP server that's allowed to delete and email a user's files. For what it does
-and who it's for, see [PRODUCT.md](PRODUCT.md).
+This page shows how calibre-mcp works, and why. For a portfolio read, start with
+[Safety mechanisms](#safety-mechanisms) and the [decision log](#decision-log). They show the
+trade-offs of an MCP server that can delete and email the files of a user. For what it does and who
+it is for, read [PRODUCT.md](PRODUCT.md).
 
 ## System overview
 
@@ -36,52 +36,56 @@ flowchart TD
     Scan --> FS[("filesystem")]
 ```
 
-**The one invariant a reviewer checks first**: the tool layer (`server.py`) and the facade
-(`library.py`) never touch `sqlite3`, `subprocess`, or `os.walk` directly. Reads always go through
-`SqliteReader`; writes always go through a runner; recursive filesystem discovery always goes
-through `folder_scan.py` (AD-021 — a third named I/O kind alongside SQL and subprocess). Grep for
-`import sqlite3` / `import subprocess` / `os.walk` outside `sqlite_reader.py`, the `*_runner.py`
-files, and `folder_scan.py` as a quick audit.
+**The first invariant to check in a review:** the tool layer (`server.py`) and the facade
+(`library.py`) never touch `sqlite3`, `subprocess` or `os.walk` directly.
+
+- Reads always go through `SqliteReader`.
+- Writes always go through a runner.
+- Recursive filesystem discovery always goes through `folder_scan.py`. AD-021 names it as a third
+  I/O kind, next to SQL and subprocess.
+
+For a quick audit, grep for `import sqlite3` / `import subprocess` / `os.walk` outside
+`sqlite_reader.py`, the `*_runner.py` files and `folder_scan.py`.
 
 ## Why hybrid reads/writes
 
-Direct SQLite reads win on speed and on **not caring whether the Calibre GUI holds a lock** —
-`list_books`/`get_book` work even while Calibre itself is open. The trade-off: `metadata.db`'s
-schema is Calibre's internal implementation, not a public contract, so `SqliteReader`'s JOINs were
-verified by hand against a real library.
+Direct SQLite reads are fast, and **a lock held by the Calibre GUI does not stop them**.
+`list_books`/`get_book` work even while Calibre is open. The trade-off: the schema of `metadata.db`
+is an internal detail of Calibre, not a public contract. So we verified the JOINs of `SqliteReader`
+by hand against a real library.
 
-Writes flip the calculus: Calibre's own integrity logic (id assignment, format-file placement,
-path renaming on metadata changes) is non-trivial, and reimplementing it against raw SQL would
-mean tracking Calibre's internals forever. `calibredb`/`ebook-convert`/`calibre-smtp` already do
-this correctly, so every mutation goes through them as a subprocess instead.
+For writes, the balance changes. The integrity logic of Calibre is complex: id assignment,
+format-file placement, path renames on metadata changes. A copy of it in raw SQL means following
+the internals of Calibre forever. `calibredb`/`ebook-convert`/`calibre-smtp` already do this
+correctly. So each change goes through them as a subprocess.
 
 ## Safety mechanisms
 
-This server can delete and email a user's files on an LLM's say-so, so the safety net is the part
-that earns trust.
+This server can delete and email the files of a user when an LLM asks. So the safety net is the
+part that earns trust.
 
-**1. Auto-backup before every write** (`backup.py`, AD-011). Before any mutation, `metadata.db` is
-copied to `backups/metadata-<timestamp>.db` with rolling retention (last 20 kept). If the backup
-can't be written, an `OSError` aborts the operation *before* any `calibredb` call runs.
+**1. Auto-backup before each write** (`backup.py`, AD-011). Before each change, the server copies
+`metadata.db` to `backups/metadata-<timestamp>.db`. Retention is rolling (the last 20 stay). If the
+backup write fails, an `OSError` stops the operation *before* any `calibredb` call.
 
-**2. Recoverable delete, never permanent** (AD-009). `remove_book` copies the book's files to
-`backups/trash/<id>-<timestamp>/` *before* calling `calibredb remove` (no `--permanent`) — so it
-also lands in Calibre's own recycle bin. Double safety net: even if the recycle bin is emptied, the
-trashed files survive.
+**2. Recoverable delete, never permanent** (AD-009). `remove_book` copies the files of the book to
+`backups/trash/<id>-<timestamp>/`. *Then* it calls `calibredb remove` (no `--permanent`), so the book
+also goes to the Calibre recycle bin. This is a double safety net: if someone empties the recycle
+bin, the trashed files survive.
 
-**3. Plan → confirm on every mutating or outward-facing tool** (`confirmation.py`, AD-012). See the
-sequence below — the short version: nothing is written or sent until the host re-calls with a
-token that provably matches what was reviewed. `add_book`/`convert_book` stay single-step: both
-are purely additive, so the backup-before-write net is judged sufficient without adding friction.
+**3. Plan → confirm on each tool that changes data or sends data out** (`confirmation.py`, AD-012).
+The sequence is below. In short: nothing is written or sent until the host calls again with a token
+that matches what the user reviewed. `add_book`/`convert_book` stay single-step. Both only add
+data, so the backup before the write is enough, with no extra friction.
 
-**4. Subprocess safety** (every `*_runner.py`, AD-005). Every external command is invoked as an
-**argument list with `shell=False`**, never a shell string — this structurally eliminates command
-injection from a book title, tag, or file path. Each runner has exactly one call site, so this is
-trivial to audit. The SMTP password is scrubbed from echoed stderr and never included in a tool's
-plan/result payload.
+**4. Subprocess safety** (each `*_runner.py`, AD-005). Each external command runs as an **argument
+list with `shell=False`**, never a shell string. This structure removes command injection through a
+book title, a tag or a file path. Each runner has exactly one call site, so the audit is easy. The
+server removes the SMTP password from echoed stderr. The password never appears in the plan or
+result payload of a tool.
 
-**5. Stdout hygiene.** MCP's stdio transport uses stdout as the JSON-RPC framing channel. All
-logging goes to **stderr only**; no module prints to stdout, checked by an end-to-end test across
+**5. Stdout hygiene.** The MCP stdio transport uses stdout as the JSON-RPC framing channel. All
+logging goes to **stderr only**. No module prints to stdout. An end-to-end test checks this across
 all nine tools.
 
 ### The plan → confirm flow
@@ -114,16 +118,16 @@ sequenceDiagram
     Server-->>Host: applied
 ```
 
-The token is `sha256("{op}|{book_id}|{sorted-json-payload}")[:16]` — not a secret, but an
-**integrity proof that the applied operation is exactly the one reviewed**. A payload that changed
-between the plan and apply call recomputes to a different token and is refused
+The token is `sha256("{op}|{book_id}|{sorted-json-payload}")[:16]`. It is not a secret. It is an
+**integrity proof: the applied operation is exactly the reviewed one**. If the payload changes
+between the plan call and the apply call, the token changes too, and the server refuses it
 (`hmac.compare_digest`, constant-time).
 
 ## The bulk operation pattern
 
-`update_metadata_bulk`, `convert_book_bulk`, and `import_folder` all broadcast one operation to N
-books. Established by `BULK-01` and reused since (AD-020), the pattern always shapes the same way,
-independent of how many bulk tools get added later:
+`update_metadata_bulk`, `convert_book_bulk` and `import_folder` all apply one operation to N books.
+`BULK-01` set the pattern, and later tools reuse it (AD-020). The shape stays the same for each new
+bulk tool:
 
 ```mermaid
 flowchart TD
@@ -136,19 +140,26 @@ flowchart TD
     F --> G["Every book lands in exactly<br/>one named bucket —<br/>never a fake 'all succeeded'"]
 ```
 
-Validating before backing up matters: a batch-level input error (an id that can never be valid, a
-target format that doesn't exist) aborts with **zero** side effects, never a partial write followed
-by a validation failure. Once past validation, a *per-book* failure is expected and handled —
-`sorted(book_ids)` keeps ordering deterministic for tests and for reading the result back. The
-bucket names are operation-specific (`applied`/`failed` for edits; `converted`/`skipped`/`failed`
-for convert, where `skipped` marks a benign no-op like "already has this format"; `added`/
-`duplicate`/`failed` for import) but the shape — every id accounted for, exactly once — never
-changes.
+The validation comes before the backup for a reason. A batch-level input error (an id that can
+never be valid, a target format that does not exist) stops with **zero** side effects. There is
+never a partial write and then a validation failure. After the validation, a *per-book* failure is
+normal, and the loop handles it. `sorted(book_ids)` keeps the order deterministic for tests and for
+the result.
+
+The bucket names depend on the operation:
+
+- Edits: `applied`/`failed`.
+- Convert: `converted`/`skipped`/`failed`. `skipped` marks a harmless no-op, for example "already
+  has this format".
+- Import: `added`/`duplicate`/`failed`.
+
+The shape never changes: each id appears exactly once.
 
 ## Error taxonomy
 
-Every failure is a typed `CalibreMcpError` subclass (`errors.py`), mapped by `server.py`'s
-`_map_errors` decorator to an explicit `ToolError` — never a silent wrong or empty result.
+Each failure is a typed `CalibreMcpError` subclass (`errors.py`). The `_map_errors` decorator of
+`server.py` maps it to an explicit `ToolError`. A failure never becomes a silent wrong or empty
+result.
 
 | Exception | Raised when |
 | --- | --- |
@@ -163,22 +174,27 @@ Every failure is a typed `CalibreMcpError` subclass (`errors.py`), mapped by `se
 
 ## Testing strategy
 
-Three pytest markers: **`unit`** (pure functions, temp dirs, no Calibre needed), **`integration`**
-(real `sqlite3`/`calibredb`/`ebook-convert`/`calibre-smtp` against a scratch library),
-**`e2e`** (drives the actual `FastMCP` tool surface).
+Three pytest markers:
 
-**Non-negotiable rule**: write tests never touch the maintainer's real library — every mutating
-test bootstraps a disposable scratch library first (`tests/conftest.py`) and seeds it with
-**synthetic** sample books built by `ebook-convert` (`tests/sample_books.py`). CI installs Calibre so
-the write-path tests run for real, not skipped; `pytest -rs` is on by default so a skip can never
-hide behind a green run again (AD-029 — until then the samples were copied from a hard-coded
-personal path, and ~180 tests skipped silently in CI and after the library moved).
+- **`unit`** — pure functions and temp dirs. No Calibre needed.
+- **`integration`** — real `sqlite3`/`calibredb`/`ebook-convert`/`calibre-smtp` against a scratch
+  library.
+- **`e2e`** — drives the real `FastMCP` tool surface.
 
-Two layers sit on top of the per-tool contracts: `tests/e2e/test_curation_journey.py` chains every
-write tool the way a host drives a session, and [`docs/live-smoke-test.md`](docs/live-smoke-test.md)
-is the manual runbook for the same journey against a real library, with a snapshot and a
-field-by-field before/after diff. A few read-only tests can also target a real library, opt-in via
-`CALIBRE_MCP_TEST_REAL_LIBRARY`.
+**Rule with no exception:** write tests never touch the real library of the maintainer. Each test
+that changes data first creates a disposable scratch library (`tests/conftest.py`). It fills the
+library with **synthetic** sample books that `ebook-convert` builds (`tests/sample_books.py`). CI
+installs Calibre, so the write-path tests run for real and do not skip. `pytest -rs` is on by
+default, so a skip cannot hide behind a green run again. (AD-029: before it, the samples came from a
+hard-coded personal path. About 180 tests skipped silently in CI and after the library moved.)
+
+Two layers sit on top of the per-tool contracts:
+
+- `tests/e2e/test_curation_journey.py` chains each write tool the way a host drives a session.
+- [`docs/live-smoke-test.md`](docs/live-smoke-test.md) is the manual runbook for the same journey
+  against a real library. It has a snapshot and a field-by-field before/after diff.
+
+A few read-only tests can also target a real library. To opt in, set `CALIBRE_MCP_TEST_REAL_LIBRARY`.
 
 ## Decision log
 
@@ -186,21 +202,22 @@ The full, dated decision record (`AD-001` … `AD-032`) lives in
 [`.specs/STATE.md`](.specs/STATE.md). Highlights not covered above:
 
 - **AD-002/003 — local stdio, no auth, no network surface.** The host launches the server
-  directly; there's no port to secure by construction.
-- **AD-006 — intelligence lives in the host, not the server.** No embedded LLM calls; calibre-mcp
-  stays a deterministic, testable tool surface.
-- **AD-010 — `search_books` resolves ids via `calibredb search`, then hydrates from SQLite.**
-  Reuses Calibre's real query grammar, at the cost of `search_books` (unlike `list_books`) being
-  able to fail under a GUI lock — a documented trade-off, not a silent gap.
-- **AD-014 — one sibling runner per external CLI.** Adding a fourth external tool means adding a
-  fourth small runner with the same shape (arg-list, `shell=False`, failure→taxonomy), not
-  branching a shared one.
+  directly. By construction, there is no port to secure.
+- **AD-006 — the intelligence lives in the host, not in the server.** No embedded LLM calls.
+  calibre-mcp stays a deterministic, testable tool surface.
+- **AD-010 — `search_books` resolves ids with `calibredb search`, then fills the data from SQLite.**
+  It reuses the real query grammar of Calibre. The cost: unlike `list_books`, `search_books` can
+  fail under a GUI lock. This trade-off is documented, not a silent gap.
+- **AD-014 — one sibling runner per external CLI.** To add a fourth external tool, add a fourth
+  small runner with the same shape (arg-list, `shell=False`, failure→taxonomy). Do not branch a
+  shared one.
 - **AD-020 — the bulk operation pattern** (validate → single backup → best-effort loop → bucketed
-  result), detailed above under [The bulk operation pattern](#the-bulk-operation-pattern).
-- **AD-021 — filesystem discovery is its own pure module** (`folder_scan.py`), naming recursive
-  directory walking as a third I/O kind the facade orchestrates but never performs itself —
-  alongside SQL reads and subprocess writes.
+  result). The section [The bulk operation pattern](#the-bulk-operation-pattern) above has the
+  detail.
+- **AD-021 — filesystem discovery is its own pure module** (`folder_scan.py`). Recursive directory
+  walking is a third I/O kind, next to SQL reads and subprocess writes. The facade orchestrates it
+  but never does it itself.
 
-This file is the stable "how it's built and why" reference. `.specs/STATE.md` and
-[`ROADMAP.md`](ROADMAP.md) (tactical) / [`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md) (strategic) /
-[`BACKLOG.md`](BACKLOG.md) are the living planning documents, updated per feature.
+This file is the stable "how it works and why" reference. The living planning documents change with
+each feature: `.specs/STATE.md`, [`ROADMAP.md`](ROADMAP.md) (tactical),
+[`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md) (strategic) and [`BACKLOG.md`](BACKLOG.md).
