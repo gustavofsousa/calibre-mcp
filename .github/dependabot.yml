@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    # mcp is capped <2 on purpose (2.0 dropped mcp.server.fastmcp); a major bump
+    # needs a migration, not an automated PR.
+    ignore:
+      - dependency-name: mcp
+        update-types: ["version-update:semver-major"]

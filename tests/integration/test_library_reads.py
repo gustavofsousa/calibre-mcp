@@ -25,8 +25,7 @@ from calibre_mcp.config import Config
 from calibre_mcp.errors import BookNotFoundError
 from calibre_mcp.library import CalibreLibrary
 from calibre_mcp.sqlite_reader import Book
-
-REAL_LIBRARY = Path("/home/gustavo/Documents/BibliotecaCalibre")
+from sample_books import sample_epub_sources
 
 
 def _config_for(library_path: Path) -> Config:
@@ -38,9 +37,7 @@ def _config_for(library_path: Path) -> Config:
 
 
 def _seed_book(scratch_library: Path, tmp_path: Path, name: str, index: int) -> int:
-    sources = list(REAL_LIBRARY.glob("**/*.epub"))
-    if len(sources) <= index:
-        pytest.skip("not enough distinct sample .epub files in the real library")
+    sources = sample_epub_sources()
     dest = tmp_path / name
     shutil.copy2(sources[index], dest)
     result = CalibredbRunner(scratch_library).add(dest)
@@ -110,12 +107,13 @@ def test_list_books_paginates_disjoint_windows(facade: CalibreLibrary):
 
 @pytest.mark.integration
 def test_count_books_reports_full_size_not_page_size(facade: CalibreLibrary):
-    # SEARCH-02: total count is independent of the 50-item page cap (lib has 170).
+    # SEARCH-02: total count is independent of the 50-item page cap. Asserted as
+    # an invariant, not a snapshot count, so the test survives the library growing.
     total = facade.count_books()
     page = facade.list_books()
 
+    assert len(page) == 50
     assert total > len(page)
-    assert total == 170
 
 
 @pytest.mark.integration

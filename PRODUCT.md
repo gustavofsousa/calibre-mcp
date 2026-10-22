@@ -2,7 +2,7 @@
 
 What calibre-mcp is *for*, who it serves, and what it does today. For how it's built, see
 [ARCHITECTURE.md](ARCHITECTURE.md); for what's next and why, see
-[`.specs/ROADMAP.md`](.specs/ROADMAP.md).
+[`ROADMAP.md`](ROADMAP.md).
 
 ## The pitch
 
@@ -151,13 +151,13 @@ Four guarantees back that flow, described in implementation depth in
 | --- | --- | --- |
 | 0 — Core Curation Loop | Search, edit, add, remove, convert, dedupe, email | Shipped |
 | 1 — Library Self-Knowledge | Stats resource: completeness, mix, data-quality flags | Shipped |
-| 2 — Bulk Ops & Organization | Bulk edit/convert/import shipped; author/tag rename + duplicate merge next | In progress |
-| 3 — Covers & Enrichment | Cover read/write, identifier-based metadata lookup (first outbound network call) | Planned |
-| 4 — Library Maintenance | Integrity check, restore, export | Planned |
+| 2 — Bulk Ops & Organization | Bulk edit/convert/import, author/tag/series rename, duplicate merge | Shipped |
+| 3 — Covers & Enrichment | Cover read/write, ISBN-based metadata proposals (first outbound network call) | Shipped; phase gate open (books without an ISBN) |
+| 4 — Library Maintenance | Metadata rollback, integrity check, restore, export | Next |
 | 5 — Distribution | Direct e-reader copy | Planned |
 
 Full phase-gates, candidate features, and sequencing rationale live in
-[`.specs/ROADMAP.md`](.specs/ROADMAP.md); the dated decision record behind each choice is in
+[`ROADMAP.md`](ROADMAP.md) (strategy in [`ROADMAP-STRATEGY.md`](ROADMAP-STRATEGY.md)); the dated decision record behind each choice is in
 [`.specs/STATE.md`](.specs/STATE.md).
 
 ## Deliberately out of scope

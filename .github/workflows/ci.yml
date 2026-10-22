@@ -15,6 +15,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Headroom for slow Ubuntu mirrors: on 2026-10-01 `apt-get install calibre`
+    # alone took 27 min (192 MB at 122 kB/s); the suite itself takes ~8 min.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +28,7 @@ jobs:
       - name: Install Calibre (provides calibredb)
         run: |
           sudo apt-get update
-          sudo apt-get install -y calibre
+          sudo apt-get install -y --no-install-recommends calibre
           calibredb --version
 
       - name: Install uv
