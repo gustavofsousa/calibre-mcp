@@ -12,6 +12,8 @@ LOOKUP-08: when the transport keeps failing, an ``EnrichmentSourceError`` is
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from calibre_mcp.errors import EnrichmentSourceError
@@ -321,3 +323,35 @@ def test_urllib_get_wraps_httperror_with_status_code(monkeypatch) -> None:
     with pytest.raises(EnrichmentSourceError) as excinfo:
         OpenLibraryClient(retries=0)._fetch("https://openlibrary.org/thing")
     assert "503" in str(excinfo.value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://covers.openlibrary.org/b/id/1-L.jpg",
+        "https://openlibrary.org@attacker.example/works/OL1W.json",
+        "https://attacker.example/b/id/1-L.jpg",
+    ],
+)
+def test_fetch_refuses_url_outside_open_library(url: str) -> None:
+    # SECURITY: cover URLs and work keys come from the response. A URL that is
+    # not HTTPS on an Open Library host is refused before the transport runs.
+    spy = _Spy([b"never"])
+    client = OpenLibraryClient(http_get=spy)
+
+    with pytest.raises(EnrichmentSourceError):
+        client._fetch(url)
+    assert spy.calls == []
+
+
+@pytest.mark.unit
+def test_download_cover_refuses_file_url(tmp_path: Path) -> None:
+    # SECURITY: a hostile cover URL never reads a local file into a cover.
+    spy = _Spy([b"secret"])
+    client = OpenLibraryClient(http_get=spy)
+
+    with pytest.raises(EnrichmentSourceError):
+        client.download_cover("file:///etc/passwd", dest_dir=tmp_path)
+    assert list(tmp_path.iterdir()) == []
