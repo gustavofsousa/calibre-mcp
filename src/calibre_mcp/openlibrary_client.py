@@ -29,6 +29,12 @@ _BOOKS_API = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&
 _EDITION_URL = "https://openlibrary.org/isbn/{isbn}.json"
 _WORK_URL = "https://openlibrary.org{work_key}.json"
 
+# SECURITY: the cover URL and the work key come from Open Library's response, so
+# every fetched URL must be HTTPS on one of these hosts. Without the check a
+# ``file://`` cover URL reads a local file, and a work key like ``@host/x`` sends
+# the request to another host.
+_ALLOWED_HOSTS = frozenset({"openlibrary.org", "covers.openlibrary.org"})
+
 # Descriptive User-Agent so Open Library can attribute traffic (LOOKUP-10).
 _DEFAULT_UA = "calibre-mcp/enrich (+https://github.com/gustavofsousa/calibre-mcp)"
 
@@ -93,8 +99,10 @@ class OpenLibraryClient:
         """GET ``url`` via the seam, retrying at most ``retries`` times (LOOKUP-10).
 
         Retries only on ``EnrichmentSourceError``; after the last attempt the most
-        recent error is re-raised (never a silent failure).
+        recent error is re-raised (never a silent failure). A URL off the Open
+        Library hosts is refused before any request.
         """
+        self._require_allowed_url(url)
         last_error: EnrichmentSourceError | None = None
         for _ in range(self._retries + 1):
             try:
@@ -174,6 +182,13 @@ class OpenLibraryClient:
             return self._flatten_description(work.get("description"))
         except EnrichmentSourceError:
             return None
+
+    @staticmethod
+    def _require_allowed_url(url: str) -> None:
+        """Refuse a URL that is not HTTPS on an Open Library host."""
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
+            raise EnrichmentSourceError("refused URL outside Open Library", url)
 
     @staticmethod
     def _parse_json(raw: bytes, url: str) -> dict[str, Any]:
