@@ -394,14 +394,17 @@ class CalibreLibrary:
         the rare non-normalizable-ISBN negative); ``no_confident_match`` when a
         title/author search found only a non-``high`` match (ENRICH-04,
         TSEARCH-09 — shown, never proposed); ``proposed`` when there is
-        something to fill (a non-empty ``proposed`` or a downloadable ``cover``);
-        ``no_new_data`` when found but the record offered no missing value.
+        something to fill (a non-empty ``proposed`` or a downloaded ``cover``);
+        ``no_new_data`` when found but the record offered no missing value. A
+        cover whose download failed (``local_path`` null) is nothing to apply:
+        ``set_cover`` cannot take it.
         """
         if not payload.get("found"):
             if payload.get("reason") == "no confident match":
                 return "no_confident_match"
             return "no_record"
-        if payload.get("proposed") or payload.get("cover") is not None:
+        cover = payload.get("cover")
+        if payload.get("proposed") or (cover is not None and cover.get("local_path")):
             return "proposed"
         return "no_new_data"
 
