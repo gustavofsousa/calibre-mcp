@@ -30,7 +30,7 @@ MEDIUM_TITLE_MIN = 0.60
 
 _RANK: dict[Confidence, int] = {"high": 2, "medium": 1, "low": 0}
 _SUBTITLE_START = re.compile(r"[:(]")
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+_NON_ALNUM = re.compile(r"[\W_]+")
 
 
 @dataclass(frozen=True)
@@ -44,10 +44,14 @@ class MatchScore:
 
 
 def normalize_title(text: str) -> str:
-    """Accent-free, case-folded, subtitle-less, punctuation-free form of ``text``."""
+    """Accent-free, case-folded, subtitle-less, punctuation-free form of ``text``.
+
+    Only the accent marks go. Letters of other scripts (Cyrillic, Greek, CJK)
+    stay: dropping them turned every such title into "".
+    """
     decomposed = unicodedata.normalize("NFKD", text)
-    ascii_only = decomposed.encode("ascii", "ignore").decode("ascii").casefold()
-    main_title = _SUBTITLE_START.split(ascii_only, maxsplit=1)[0]
+    unaccented = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    main_title = _SUBTITLE_START.split(unaccented.casefold(), maxsplit=1)[0]
     return " ".join(_NON_ALNUM.sub(" ", main_title).split())
 
 
@@ -57,6 +61,11 @@ def _normalize_name(name: str) -> str:
 
 
 def _ratio(a: str, b: str) -> float:
+    # INVARIANT: an empty side carries no evidence. SequenceMatcher rates two
+    # empty strings 1.0, which made any two blank-after-normalizing titles a
+    # "high" match.
+    if not a or not b:
+        return 0.0
     return SequenceMatcher(None, a, b).ratio()
 
 

@@ -48,6 +48,40 @@ def test_normalize_cuts_subtitle_at_colon_or_parenthesis():
     )
 
 
+@pytest.mark.unit
+def test_normalize_keeps_letters_of_other_scripts():
+    assert normalize_title("Война и мир") != ""
+    assert normalize_title("ВОЙНА И МИР") == normalize_title("Война и мир")
+    assert normalize_title("Ἰλιάς") == normalize_title("ΙΛΙΑΣ") != ""
+
+
+@pytest.mark.unit
+def test_score_different_non_latin_books_are_not_high():
+    # Two different Russian books must not match: dropping non-ASCII letters
+    # made both titles and both authors "", and "" vs "" scored 1.0.
+    result = score(
+        "Преступление и наказание",
+        "Фёдор Достоевский",
+        _candidate("Война и мир", "Лев Толстой"),
+    )
+    assert result.confidence != "high"
+
+
+@pytest.mark.unit
+def test_score_same_non_latin_book_is_high():
+    result = score(
+        "Война и мир", "Лев Толстой", _candidate("Война и мир", "Лев Толстой")
+    )
+    assert result.confidence == "high"
+
+
+@pytest.mark.unit
+def test_score_title_empty_after_normalizing_is_low():
+    result = score("(Sem título)", "Autor", _candidate("(Untitled)", "Autor"))
+    assert result.title_similarity == 0.0
+    assert result.confidence == "low"
+
+
 # ------------------------------------------------------------------ scoring
 
 
