@@ -16,8 +16,10 @@ from __future__ import annotations
 import atexit
 import functools
 import shutil
+import struct
 import subprocess
 import tempfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -68,3 +70,25 @@ def sample_epub_sources() -> list[Path]:
     if shutil.which("ebook-convert") is None:
         pytest.skip("ebook-convert not on PATH")
     return [_build_sample_epub(index) for index in range(SAMPLE_COUNT)]
+
+
+def write_cover_png(path: Path, width: int = 100, height: int = 150) -> Path:
+    """Write a real WxH PNG (stdlib only) usable as a Calibre cover.
+
+    Calibre's Qt rejects a degenerate 1x1 image ("Image is empty"), so this
+    emits a proper white image.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    rows = b"".join(b"\x00" + b"\xff\xff\xff" * width for _ in range(height))
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+    return path

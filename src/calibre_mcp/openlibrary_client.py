@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,12 @@ from .errors import EnrichmentSourceError
 _BOOKS_API = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
 _EDITION_URL = "https://openlibrary.org/isbn/{isbn}.json"
 _WORK_URL = "https://openlibrary.org{work_key}.json"
+# Title/author search (ENRICH-04): only the fields the matcher and the proposal
+# use, so responses stay cheap (the docs warn `fields=*` is expensive).
+_SEARCH_URL = "https://openlibrary.org/search.json?{query}"
+_SEARCH_FIELDS = "key,title,author_name,cover_i"
+_SEARCH_LIMIT = 5
+_COVER_ID_URL = "https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
 
 # SECURITY: the cover URL and the work key come from Open Library's response, so
 # every fetched URL must be HTTPS on one of these hosts. Without the check a
@@ -41,6 +48,10 @@ _DEFAULT_UA = "calibre-mcp/enrich (+https://github.com/gustavofsousa/calibre-mcp
 # The injectable transport seam: url + timeout -> raw bytes. Tests feed a fake so
 # no test ever touches the real network (spec test-safety rule).
 HttpGet = Callable[[str, float], bytes]
+
+# Open Library's documented limit for unidentified clients is 1 request/second
+# (https://openlibrary.org/developers/api); a batch sweep must not burst past it.
+_REAL_TRANSPORT_MIN_INTERVAL = 1.0
 
 
 @dataclass(frozen=True)
@@ -58,6 +69,20 @@ class OpenLibraryRecord:
     cover_url: str | None
 
 
+@dataclass(frozen=True)
+class SearchCandidate:
+    """One work returned by Open Library's title/author search (ENRICH-04).
+
+    Work-level only: ``work_key`` (``/works/OL…W``) leads to the description,
+    ``cover_url`` is the id-form cover URL (not rate-limited, AD-026).
+    """
+
+    work_key: str
+    title: str
+    authors: list[str]
+    cover_url: str | None
+
+
 class OpenLibraryClient:
     """Fetches metadata + covers from Open Library over a bounded, retrying seam."""
 
@@ -68,10 +93,21 @@ class OpenLibraryClient:
         timeout: float = 10.0,
         retries: int = 1,
         user_agent: str = _DEFAULT_UA,
+        min_interval: float | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._timeout = timeout
         self._retries = retries
         self._user_agent = user_agent
+        # Pacing protects the real API; an injected transport (tests) has no
+        # remote to protect, so it is unpaced unless a test asks for pacing.
+        if min_interval is None:
+            min_interval = _REAL_TRANSPORT_MIN_INTERVAL if http_get is None else 0.0
+        self._min_interval = min_interval
+        self._sleep = sleep
+        self._clock = clock
+        self._last_request_at: float | None = None
         # Default to the real urllib transport; the None sentinel lets that default
         # bind to this instance's user_agent while keeping the seam 2-arg.
         self._http_get: HttpGet = http_get if http_get is not None else self._urllib_get
@@ -105,6 +141,7 @@ class OpenLibraryClient:
         self._require_allowed_url(url)
         last_error: EnrichmentSourceError | None = None
         for _ in range(self._retries + 1):
+            self._wait_for_turn()
             try:
                 return self._http_get(url, self._timeout)
             except EnrichmentSourceError as exc:
@@ -162,6 +199,81 @@ class OpenLibraryClient:
             raise EnrichmentSourceError(reason, cover_url) from exc
         return Path(temp_path)
 
+    def _wait_for_turn(self) -> None:
+        """Sleep just long enough to keep >= ``min_interval`` between requests."""
+        now = self._clock()
+        if self._last_request_at is not None:
+            remaining = self._min_interval - (now - self._last_request_at)
+            if remaining > 0:
+                self._sleep(remaining)
+                now = self._clock()
+        self._last_request_at = now
+
+    def search_works(self, title: str, author: str | None) -> list[SearchCandidate]:
+        """Search Open Library works by title (+ author) (ENRICH-04, TSEARCH-01).
+
+        At most ``_SEARCH_LIMIT`` candidates, in Open Library's own order. When
+        a query that included ``author`` finds nothing, one retry with the title
+        alone: catalogs spell authors differently ("Papa Francisco" vs "Pope
+        Francis"), and the matcher still checks the author afterwards. A
+        transport/parse failure raises ``EnrichmentSourceError`` (TSEARCH-07).
+        """
+        candidates = self._search(title, author)
+        if not candidates and author is not None:
+            candidates = self._search(title, None)
+        return candidates
+
+    def fetch_work_description(self, work_key: str) -> str | None:
+        """The work's description, or ``None`` on any failure (best-effort).
+
+        A failed description must never lose the rest of a proposal (TSEARCH-07,
+        LOOKUP-04), so transport, parse and shape problems all yield ``None``.
+        """
+        try:
+            work = self._parse_json(
+                self._fetch(_WORK_URL.format(work_key=work_key)), ""
+            )
+        except EnrichmentSourceError:
+            return None
+        return self._flatten_description(work.get("description"))
+
+    def _search(self, title: str, author: str | None) -> list[SearchCandidate]:
+        params = {"title": title}
+        if author is not None:
+            params["author"] = author
+        params["limit"] = str(_SEARCH_LIMIT)
+        params["fields"] = _SEARCH_FIELDS
+        url = _SEARCH_URL.format(query=urllib.parse.urlencode(params))
+        docs = self._parse_json(self._fetch(url), url).get("docs")
+        if not isinstance(docs, list):
+            return []
+        return [
+            candidate
+            for doc in docs[:_SEARCH_LIMIT]
+            if (candidate := self._to_candidate(doc)) is not None
+        ]
+
+    @staticmethod
+    def _to_candidate(doc: object) -> SearchCandidate | None:
+        if not isinstance(doc, dict):
+            return None
+        key, title = doc.get("key"), doc.get("title")
+        if not isinstance(key, str) or not key or not isinstance(title, str):
+            return None
+        names = doc.get("author_name")
+        authors = (
+            [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
+        )
+        cover_id = doc.get("cover_i")
+        cover_url = (
+            _COVER_ID_URL.format(cover_id=cover_id)
+            if isinstance(cover_id, int)
+            else None
+        )
+        return SearchCandidate(
+            work_key=key, title=title, authors=authors, cover_url=cover_url
+        )
+
     def _fetch_work_description(self, isbn: str) -> str | None:
         """Follow edition->work for the description; any failure -> ``None``.
 
@@ -171,17 +283,15 @@ class OpenLibraryClient:
         """
         try:
             edition = self._parse_json(self._fetch(_EDITION_URL.format(isbn=isbn)), "")
-            works = edition.get("works")
-            if not isinstance(works, list) or not works:
-                return None
-            work_key = works[0].get("key") if isinstance(works[0], dict) else None
-            if not isinstance(work_key, str) or not work_key:
-                return None
-            work_url = _WORK_URL.format(work_key=work_key)
-            work = self._parse_json(self._fetch(work_url), "")
-            return self._flatten_description(work.get("description"))
         except EnrichmentSourceError:
             return None
+        works = edition.get("works")
+        if not isinstance(works, list) or not works:
+            return None
+        work_key = works[0].get("key") if isinstance(works[0], dict) else None
+        if not isinstance(work_key, str) or not work_key:
+            return None
+        return self.fetch_work_description(work_key)
 
     @staticmethod
     def _require_allowed_url(url: str) -> None:

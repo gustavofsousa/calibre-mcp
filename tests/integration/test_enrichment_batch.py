@@ -15,6 +15,10 @@ ENRICH3-05/06: candidate_count/processed reported; empty / offset-past-end
 ENRICH3-07:    default cap (25) applied when no limit given (effective + reader arg).
 ENRICH3-08:    bad bound rejected BEFORE any selection/network call.
 ENRICH3-09:    sequential, exactly one lookup per processed candidate, in id order.
+
+ENRICH-04 TSEARCH-09 (revises ENRICH3-01): ISBN-less titled books missing comments
+or a cover are swept via title/author search; only a high match is `proposed`, a
+lower one lands in the new `no_confident_match` bucket.
 """
 
 from __future__ import annotations
@@ -32,7 +36,8 @@ from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.config import Config
 from calibre_mcp.errors import EnrichmentSourceError, InvalidInputError
 from calibre_mcp.library import ENRICH_BATCH_DEFAULT, CalibreLibrary
-from calibre_mcp.openlibrary_client import OpenLibraryRecord
+from calibre_mcp.openlibrary_client import OpenLibraryRecord, SearchCandidate
+from sample_books import write_cover_png
 
 _COVER_URL = "https://covers.openlibrary.org/b/id/12345-L.jpg"
 
@@ -57,9 +62,12 @@ class _RoutingEnricher:
         self,
         records: dict[str, OpenLibraryRecord | Exception | None],
         cover_dir: Path,
+        candidates_by_title: dict[str, list[SearchCandidate]] | None = None,
     ) -> None:
         self._records = records
         self._cover_dir = cover_dir
+        self._candidates_by_title = candidates_by_title or {}
+        self.searched_titles: list[str] = []
         self.fetch_calls = 0
         self.received_isbns: list[str] = []
 
@@ -70,6 +78,13 @@ class _RoutingEnricher:
         if isinstance(value, Exception):
             raise value
         return value
+
+    def search_works(self, title: str, author: str | None) -> list[SearchCandidate]:
+        self.searched_titles.append(title)
+        return self._candidates_by_title.get(title, [])
+
+    def fetch_work_description(self, work_key: str) -> str | None:
+        return f"Description of {work_key}"
 
     def download_cover(self, cover_url: str, dest_dir: Path | None = None) -> Path:
         fd, path = tempfile.mkstemp(prefix="fake-batch-", dir=self._cover_dir)
@@ -101,7 +116,8 @@ def test_sweep_returns_proposals_isolates_errors_and_writes_nothing(
     facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
 ) -> None:
     # ENRICH3-01/02/04: A,B propose (verbatim ENRICH-01 payload), E errors and the
-    # sweep still returns A,B; C (complete) and D (no isbn) are not candidates.
+    # sweep still returns A,B; C (complete) and D (no isbn, and nothing a search
+    # could fill — TSEARCH-09) are not candidates.
     runner = CalibredbRunner(scratch_library)
 
     a = _seed_empty_book(scratch_library, "A all gaps")
@@ -114,7 +130,10 @@ def test_sweep_returns_proposals_isolates_errors_and_writes_nothing(
                             "comments": "Notes", "publisher": "Pub",
                             "pubdate": "2015-06-15"})
     d = _seed_empty_book(scratch_library, "D no isbn")  # excluded
-    runner.set_metadata(d, {"identifiers": "google:xyz"})
+    runner.set_metadata(d, {
+        "identifiers": "google:xyz", "comments": "Notes",
+        "cover": str(write_cover_png(tmp_path / "d.png")),
+    })
     e = _seed_empty_book(scratch_library, "E raises")
     runner.set_metadata(e, {"identifiers": "isbn:9780000000005"})
 
@@ -135,7 +154,8 @@ def test_sweep_returns_proposals_isolates_errors_and_writes_nothing(
     assert result["candidate_count"] == 3
     assert result["processed"] == 3
     assert result["summary"] == {
-        "proposed": 2, "no_new_data": 0, "no_record": 0, "error": 1
+        "proposed": 2, "no_new_data": 0, "no_record": 0,
+        "no_confident_match": 0, "error": 1
     }
     by_id = {r["book_id"]: r for r in result["results"]}
     assert by_id[a]["status"] == "proposed"
@@ -198,7 +218,8 @@ def test_offset_past_end_is_empty_not_error(
     assert result["processed"] == 0
     assert result["results"] == []
     assert result["summary"] == {
-        "proposed": 0, "no_new_data": 0, "no_record": 0, "error": 0
+        "proposed": 0, "no_new_data": 0, "no_record": 0,
+        "no_confident_match": 0, "error": 0
     }
     assert enricher.fetch_calls == 0
 
@@ -227,7 +248,8 @@ def test_no_new_data_and_no_record_statuses(
     assert by_id[empty_hit]["status"] == "no_new_data"
     assert by_id[missing]["status"] == "no_record"
     assert result["summary"] == {
-        "proposed": 0, "no_new_data": 1, "no_record": 1, "error": 0
+        "proposed": 0, "no_new_data": 1, "no_record": 1,
+        "no_confident_match": 0, "error": 0
     }
 
 
@@ -359,3 +381,81 @@ def test_sweep_is_sequential_one_lookup_per_candidate(
     assert result["processed"] == 3
     assert enricher.fetch_calls == 3  # one lookup per candidate
     assert enricher.received_isbns == isbns  # id order preserved
+
+
+@pytest.mark.integration
+def test_isbn_less_books_are_swept_and_only_high_matches_are_proposed(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+) -> None:
+    # TSEARCH-09: high -> proposed (description + cover); same title but another
+    # author -> no_confident_match (reported, not proposed); nothing written.
+    runner = CalibredbRunner(scratch_library)
+    confident = _seed_empty_book(scratch_library, "The Hobbit")
+    runner.set_metadata(confident, {"authors": ["J. R. R. Tolkien"]})
+    doubtful = _seed_empty_book(scratch_library, "Dune")
+    runner.set_metadata(doubtful, {"authors": ["Someone Else"]})
+    facade._enricher = _RoutingEnricher(
+        {},
+        tmp_path,
+        candidates_by_title={
+            "The Hobbit": [
+                SearchCandidate(
+                    "/works/OL1W", "The Hobbit", ["J.R.R. Tolkien"], _COVER_URL
+                )
+            ],
+            "Dune": [SearchCandidate("/works/OL2W", "Dune", ["Frank Herbert"], None)],
+        },
+    )
+    before = _db_digest(scratch_library)
+
+    result = facade.enrich_missing()
+
+    by_id = {item["book_id"]: item for item in result["results"]}
+    assert by_id[confident]["status"] == "proposed"
+    assert by_id[confident]["proposed"] == {"comments": "Description of /works/OL1W"}
+    assert by_id[confident]["match"]["confidence"] == "high"
+    assert by_id[doubtful]["status"] == "no_confident_match"
+    assert by_id[doubtful]["match"]["work_key"] == "/works/OL2W"
+    assert "proposed" not in by_id[doubtful]
+    assert result["summary"] == {
+        "proposed": 1,
+        "no_new_data": 0,
+        "no_record": 0,
+        "no_confident_match": 1,
+        "error": 0,
+    }
+    assert _db_digest(scratch_library) == before
+
+
+@pytest.mark.integration
+def test_high_match_without_description_on_a_covered_book_is_no_new_data(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+) -> None:
+    # Spec edge case: the work has no description and the book already has a
+    # cover -> found:true with an empty proposal -> no_new_data in the batch.
+    runner = CalibredbRunner(scratch_library)
+    book = _seed_empty_book(scratch_library, "The Hobbit")
+    runner.set_metadata(book, {
+        "authors": ["J. R. R. Tolkien"],
+        "cover": str(write_cover_png(tmp_path / "c.png")),
+    })
+    enricher = _RoutingEnricher(
+        {},
+        tmp_path,
+        candidates_by_title={
+            "The Hobbit": [
+                SearchCandidate(
+                    "/works/OL1W", "The Hobbit", ["J.R.R. Tolkien"], _COVER_URL
+                )
+            ]
+        },
+    )
+    enricher.fetch_work_description = lambda work_key: None  # work has none
+    facade._enricher = enricher
+
+    result = facade.enrich_missing()
+
+    assert result["results"][0]["status"] == "no_new_data"
+    assert result["results"][0]["proposed"] == {}
+    assert result["results"][0]["cover"] is None
+    assert result["summary"]["no_new_data"] == 1

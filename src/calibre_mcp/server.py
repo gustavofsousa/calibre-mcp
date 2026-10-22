@@ -555,16 +555,28 @@ def find_duplicates() -> dict:
 @mcp.tool()
 @_map_errors
 def enrich_from_identifier(book_id: int) -> dict:
-    """Propose gap-filling metadata for a book from its ISBN — READ-ONLY (ENRICH-01).
+    """Propose gap-filling metadata for a book from Open Library — READ-ONLY
+    (ENRICH-01, ENRICH-04).
 
-    Makes one outbound call to Open Library keyed on the book's ISBN and returns
-    values ONLY for the fields the book currently lacks (comments/publisher/
-    pubdate), plus a downloaded cover ``local_path`` when the book has no cover.
+    With an ISBN: looks the book up by ISBN and returns values ONLY for the
+    fields it currently lacks (comments/publisher/pubdate), plus a downloaded
+    cover ``local_path`` when the book has no cover.
+
+    Without an ISBN: searches Open Library by title + primary author and scores
+    the results. ONLY a ``high``-confidence match (title AND author agree)
+    becomes a proposal, and only for the description (-> ``comments``) and the
+    cover — never publisher/pubdate, which differ between editions. The
+    ``match`` block shows exactly which work was matched (title, authors,
+    work_key, similarities): SHOW IT TO THE USER before they approve applying.
+    A lower-confidence match returns ``{found: false, reason: "no confident
+    match", match}`` — reported, never proposed.
+
     Writes NOTHING to the library: it PROPOSES, it does not apply. To apply, feed
     ``proposed`` into ``update_metadata`` and the cover ``local_path`` into
-    ``set_cover``. A book with no ISBN, or one Open Library has no record for,
+    ``set_cover``. No ISBN and no usable title, or no record at the source,
     returns ``{found: false, reason}`` (a normal result, not an error); when the
-    source is offline/unreachable the tool fails with a clear error.
+    source is offline/unreachable the tool fails with a clear error. Requests to
+    Open Library are paced to 1 per second.
     """
     return _jsonify(_get_library().enrich_from_identifier(book_id))
 
@@ -575,16 +587,23 @@ def enrich_missing(limit: int | None = None, offset: int = 0) -> dict:
     """Batch review: propose gap-filling metadata for incomplete books (ENRICH-03).
 
     Selects the books that carry an ISBN AND are still missing an enrichable
-    field (comments/publisher/pubdate), looks each up via the same Open Library
-    path as ``enrich_from_identifier``, and returns ONE advisory proposal per
-    book plus a bucketed ``summary``. Writes NOTHING and NEVER bulk-applies: the
+    field (comments/publisher/pubdate), plus the books WITHOUT an ISBN that have
+    a title and lack comments or a cover; looks each up via the same Open Library
+    path as ``enrich_from_identifier`` (ISBN lookup or title/author search), and
+    returns ONE advisory proposal per book plus a bucketed ``summary``
+    (``proposed``, ``no_new_data``, ``no_record``, ``no_confident_match``,
+    ``error``). Search results carry a ``match`` block; only ``high`` matches are
+    ``proposed``. Writes NOTHING and NEVER bulk-applies: the
     ``results`` are proposals to walk. HOST: for each ``status:"proposed"`` item,
     apply it per book through the ENRICH-02 chain — feed ``proposed`` into
     ``update_metadata`` and any ``cover.local_path`` into ``set_cover`` — after
     the USER approves that book. Bounded: at most ``limit`` candidates (default
     25, ceiling 100); ``offset`` pages the rest; ``candidate_count`` vs
     ``processed`` tells you if more remain. A single book's source failure
-    becomes that item's ``status:"error"`` and never aborts the sweep.
+    becomes that item's ``status:"error"`` and never aborts the sweep. Requests
+    are paced to 1/second (Open Library's limit), so a full page of title
+    searches can take a minute or two — use a smaller ``limit`` if your host
+    has a short tool timeout.
     """
     return _jsonify(_get_library().enrich_missing(limit=limit, offset=offset))
 
@@ -624,8 +643,9 @@ def email_book(
 @_map_resource_errors
 def library_stats_resource() -> dict:
     """Aggregate baseline profile of the library (STATS-01): totals, format/
-    language mix, metadata completeness, identifier types, top authors/tags,
-    and data-quality flags (including duplicate-title groups). Read-only,
+    language mix, metadata completeness (including cover coverage, STATS-02),
+    identifier types, top authors/tags, and data-quality flags (duplicate-title
+    groups, and ``missing_cover_ids`` -- up to 50 uncovered book ids). Read-only,
     parameter-free, and lock-independent — known on connect without a tool
     call.
     """

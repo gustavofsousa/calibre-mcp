@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from calibre_mcp import sqlite_reader as sqlite_reader_module
 from calibre_mcp.calibredb_runner import CalibredbRunner
 from calibre_mcp.errors import BookNotFoundError, InvalidInputError
 from calibre_mcp.sqlite_reader import Book, LibraryStats, SqliteReader
@@ -464,6 +465,7 @@ def test_library_stats_returns_every_ac1_sub_object(reader: SqliteReader):
         "real_pubdate",
         "series",
         "rating",
+        "cover",
     }
     for field in stats.metadata_completeness.values():
         assert set(field) == {"filled", "pct"}
@@ -474,6 +476,7 @@ def test_library_stats_returns_every_ac1_sub_object(reader: SqliteReader):
         "placeholder_pubdate_0101",
         "series_unused",
         "rating_unused",
+        "missing_cover_ids",
     }
 
 
@@ -557,4 +560,47 @@ def test_library_stats_empty_library_returns_zeroed_snapshot(scratch_library: Pa
         "placeholder_pubdate_0101": 0,
         "series_unused": True,
         "rating_unused": True,
+        # COVCOV-03: an empty library has no uncovered book to list.
+        "missing_cover_ids": [],
     }
+    assert stats.metadata_completeness["cover"] == {"filled": 0, "pct": 0.0}
+
+
+# ----------------------------------------------------- STATS-02 cover coverage
+
+
+@pytest.mark.integration
+def test_library_stats_reports_cover_coverage_and_missing_ids(
+    scratch_library: Path, tmp_path: Path
+):
+    # COVCOV-01/02: filled counts covered books; pct over all books; the
+    # uncovered ids are listed in ascending order.
+    covered = _seed_covered_book(scratch_library, tmp_path)
+    uncovered_a = _seed_empty_book(scratch_library, "No Cover A")
+    uncovered_b = _seed_empty_book(scratch_library, "No Cover B")
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    stats = reader.library_stats()
+
+    assert covered not in stats.data_quality["missing_cover_ids"]
+    assert stats.metadata_completeness["cover"] == {"filled": 1, "pct": 33.3}
+    assert stats.data_quality["missing_cover_ids"] == sorted([uncovered_a, uncovered_b])
+
+
+@pytest.mark.integration
+def test_library_stats_missing_cover_ids_are_capped(
+    scratch_library: Path, monkeypatch
+):
+    # COVCOV-02: the list is bounded at 50 ids (first N by id); the full count
+    # still comes from metadata_completeness.cover. The spec's cap is pinned
+    # first; the capping behavior is then exercised at 2 to avoid seeding 51
+    # books through calibredb.
+    assert sqlite_reader_module.MISSING_COVER_IDS_CAP == 50
+    monkeypatch.setattr(sqlite_reader_module, "MISSING_COVER_IDS_CAP", 2)
+    ids = [_seed_empty_book(scratch_library, f"No Cover {n}") for n in range(3)]
+    reader = SqliteReader(scratch_library / "metadata.db", scratch_library)
+
+    stats = reader.library_stats()
+
+    assert stats.data_quality["missing_cover_ids"] == sorted(ids)[:2]
+    assert stats.metadata_completeness["cover"]["filled"] == 0

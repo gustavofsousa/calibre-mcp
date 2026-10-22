@@ -17,7 +17,11 @@ from pathlib import Path
 import pytest
 
 from calibre_mcp.errors import EnrichmentSourceError
-from calibre_mcp.openlibrary_client import OpenLibraryClient, OpenLibraryRecord
+from calibre_mcp.openlibrary_client import (
+    OpenLibraryClient,
+    OpenLibraryRecord,
+    SearchCandidate,
+)
 
 
 class _Spy:
@@ -324,6 +328,208 @@ def test_urllib_get_wraps_httperror_with_status_code(monkeypatch) -> None:
         OpenLibraryClient(retries=0)._fetch("https://openlibrary.org/thing")
     assert "503" in str(excinfo.value)
 
+
+# ------------------------------------------------- ENRICH-04: title/author search
+
+
+def _search_body(*docs: dict[str, object]) -> bytes:
+    import json
+
+    return json.dumps({"numFound": len(docs), "docs": list(docs)}).encode()
+
+
+def _query(url: str) -> dict[str, list[str]]:
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(url)
+    assert parsed.netloc == "openlibrary.org"
+    assert parsed.path == "/search.json"
+    return parse_qs(parsed.query)
+
+
+@pytest.mark.unit
+def test_search_sends_title_author_limit_and_fields() -> None:
+    # TSEARCH-01: title + primary author, at most 5 results, only used fields.
+    spy = _Spy([_search_body()])
+    client = OpenLibraryClient(http_get=spy, retries=0)
+
+    client.search_works("The Hobbit", None)
+
+    query = _query(spy.calls[0][0])
+    assert query["title"] == ["The Hobbit"]
+    assert "author" not in query
+    assert query["limit"] == ["5"]
+    assert query["fields"] == ["key,title,author_name,cover_i"]
+
+
+_HOBBIT = {
+    "key": "/works/OL262758W",
+    "title": "The Hobbit",
+    "author_name": ["J.R.R. Tolkien"],
+    "cover_i": 14627509,
+}
+
+
+@pytest.mark.unit
+def test_search_maps_docs_to_candidates_with_id_cover_url() -> None:
+    # TSEARCH-03 input: work key, title, authors and the id-form cover URL.
+    spy = _Spy([_search_body(_HOBBIT, {"key": "/works/OL2W", "title": "Other"})])
+    client = OpenLibraryClient(http_get=spy)
+
+    candidates = client.search_works("The Hobbit", "J. R. R. Tolkien")
+
+    assert candidates == [
+        SearchCandidate(
+            work_key="/works/OL262758W",
+            title="The Hobbit",
+            authors=["J.R.R. Tolkien"],
+            cover_url="https://covers.openlibrary.org/b/id/14627509-L.jpg",
+        ),
+        SearchCandidate(
+            work_key="/works/OL2W", title="Other", authors=[], cover_url=None
+        ),
+    ]
+    assert _query(spy.calls[0][0])["author"] == ["J. R. R. Tolkien"]
+
+
+@pytest.mark.unit
+def test_search_retries_title_only_when_author_query_finds_nothing() -> None:
+    # TSEARCH-01 / A7: no result with the author -> one retry without it.
+    spy = _Spy([_search_body(), _search_body(_HOBBIT)])
+    client = OpenLibraryClient(http_get=spy)
+
+    candidates = client.search_works("The Hobbit", "Tolkien")
+
+    assert [c.work_key for c in candidates] == ["/works/OL262758W"]
+    assert len(spy.calls) == 2
+    assert "author" in _query(spy.calls[0][0])
+    assert "author" not in _query(spy.calls[1][0])
+
+
+@pytest.mark.unit
+def test_search_without_author_never_retries() -> None:
+    # TSEARCH-01: the title-only retry exists only when an author was sent.
+    spy = _Spy([_search_body()])
+    client = OpenLibraryClient(http_get=spy)
+
+    assert client.search_works("Nothing Here", None) == []
+    assert len(spy.calls) == 1
+
+
+@pytest.mark.unit
+def test_search_unparseable_body_raises_source_error() -> None:
+    # TSEARCH-07: a search transport/parse failure is a source error.
+    spy = _Spy([b"<html>not json</html>"])
+    client = OpenLibraryClient(http_get=spy)
+
+    with pytest.raises(EnrichmentSourceError):
+        client.search_works("The Hobbit", None)
+
+
+@pytest.mark.unit
+def test_fetch_work_description_flattens_value_object() -> None:
+    # TSEARCH-03 input: the work's description (string-or-{value} shape).
+    spy = _Spy([b'{"description": {"type": "/type/text", "value": "A hobbit."}}'])
+    client = OpenLibraryClient(http_get=spy)
+
+    assert client.fetch_work_description("/works/OL262758W") == "A hobbit."
+    assert spy.calls[0][0] == "https://openlibrary.org/works/OL262758W.json"
+
+
+@pytest.mark.unit
+def test_fetch_work_description_failure_is_none_not_an_error() -> None:
+    # TSEARCH-07: a failed description fetch is non-fatal.
+    spy = _Spy([EnrichmentSourceError("down"), EnrichmentSourceError("down")])
+    client = OpenLibraryClient(http_get=spy)
+
+    assert client.fetch_work_description("/works/OL1W") is None
+
+
+# ---------------------------------------------- AD-032: request pacing (1 req/s)
+
+
+class _FakeClock:
+    """A controllable monotonic clock; ``sleep`` advances it and records waits."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.slept: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(round(seconds, 6))
+        self.now += seconds
+
+
+@pytest.mark.unit
+def test_pacing_first_request_never_waits() -> None:
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([b"{}"]), min_interval=1.0, sleep=time.sleep, clock=time.clock
+    )
+
+    client._fetch("https://openlibrary.org/a")
+
+    assert time.slept == []
+
+
+@pytest.mark.unit
+def test_pacing_waits_only_the_remainder_of_the_interval() -> None:
+    # Open Library documents 1 request/second for unidentified clients.
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([b"{}", b"{}"]),
+        min_interval=1.0,
+        sleep=time.sleep,
+        clock=time.clock,
+    )
+
+    client._fetch("https://openlibrary.org/a")
+    time.now += 0.3
+    client._fetch("https://openlibrary.org/b")
+
+    assert time.slept == [0.7]
+
+
+@pytest.mark.unit
+def test_pacing_no_wait_once_the_interval_has_passed() -> None:
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([b"{}", b"{}"]),
+        min_interval=1.0,
+        sleep=time.sleep,
+        clock=time.clock,
+    )
+
+    client._fetch("https://openlibrary.org/a")
+    time.now += 2.0
+    client._fetch("https://openlibrary.org/b")
+
+    assert time.slept == []
+
+
+@pytest.mark.unit
+def test_pacing_applies_to_retries_too() -> None:
+    # A retry is a request: it must not burst right after the failed attempt.
+    time = _FakeClock()
+    client = OpenLibraryClient(
+        http_get=_Spy([EnrichmentSourceError("blip"), b"{}"]),
+        min_interval=1.0,
+        sleep=time.sleep,
+        clock=time.clock,
+    )
+
+    client._fetch("https://openlibrary.org/a")
+
+    assert time.slept == [1.0]
+
+
+@pytest.mark.unit
+def test_pacing_defaults_to_one_second_for_the_real_transport() -> None:
+    assert OpenLibraryClient()._min_interval == 1.0
+    assert OpenLibraryClient(http_get=_Spy([]))._min_interval == 0.0
 
 @pytest.mark.unit
 @pytest.mark.parametrize(

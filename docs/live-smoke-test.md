@@ -1,13 +1,16 @@
 # Live smoke test — every tool against a real library, without risking it
 
-The automated suite proves each contract on throwaway scratch libraries, and
-`tests/e2e/test_curation_journey.py` chains every write tool on synthetic books. What neither can
-prove is that the server behaves correctly **as wired into a real host, against a real library** —
-real Calibre version, real lock behavior, real Open Library responses. This runbook does that
-safely, and is worth running before each release.
+The automated suite proves each contract on throwaway scratch libraries.
+`tests/e2e/test_curation_journey.py` chains each write tool on synthetic books. Neither one proves
+that the server works **in a real host, against a real library**: the real Calibre version, the real
+lock behavior, the real Open Library responses. This runbook proves that, safely. Run it before each
+release.
 
-**Safety model:** a full copy of the library first, test books that can never collide with real ones,
-and a field-by-field diff at the end proving no real book changed.
+**Safety model:**
+
+- First, a full copy of the library.
+- Test books that can never collide with real ones.
+- At the end, a field-by-field diff that proves that no real book changed.
 
 ## 1. Snapshot and baseline (before touching anything)
 
@@ -18,13 +21,13 @@ cp -a "$LIB" "$SNAP"                                    # full restore point
 calibredb list --library-path "$LIB" --fields all --for-machine > before.json
 ```
 
-Close the Calibre GUI first if you want `calibredb`-backed tools to run without lock contention.
+If you want the `calibredb` tools to run with no lock contention, close the Calibre GUI first.
 
 ## 2. Make test copies that can't collide with real books
 
-Copy 2–3 small real `.epub` files out of the library and rewrite their embedded metadata, so every
-test record is unmistakable (`MCPTEST` prefix) and `calibredb` doesn't flag them as duplicates of the
-originals:
+Copy 2–3 small real `.epub` files out of the library. Rewrite their embedded metadata. Then each
+test record is easy to identify (`MCPTEST` prefix), and `calibredb` does not flag them as duplicates
+of the originals:
 
 ```bash
 mkdir -p mcptest/folder/sub
@@ -38,13 +41,15 @@ cp mcptest/folder/sub/c.epub mcptest/d.epub && ebook-meta mcptest/d.epub -t "MCP
 echo note > mcptest/folder/readme.txt                                               # must be ignored
 ```
 
-Every tag, series and rename target used below is also `mcptest-*` / `MCPTEST *`, and **every plan
-must list only MCPTEST books** — if a plan ever names a real book, stop and don't confirm.
+Each tag, series and rename target below is also `mcptest-*` / `MCPTEST *`.
+
+WARNING: **Each plan must list only MCPTEST books.** If a plan names a real book, stop. Do not
+confirm it.
 
 ## 3. Drive every tool through the host
 
-Ask the host (Claude Code / Desktop) to run, in order — for each two-step tool, check the plan, then
-confirm with its token:
+Ask the host (Claude Code / Desktop) to run these calls in order. For each two-step tool, check the
+plan, then confirm with its token:
 
 | # | Call | Expect |
 | --- | --- | --- |
@@ -80,9 +85,10 @@ print(f"OK — {len(before)} real books identical, field by field (incl. last_mo
 EOF
 ```
 
-Residue that is expected and harmless: the test books in Calibre's recycle bin (`.caltrash/`,
-auto-purged by Calibre) and in `.calibre-mcp-backups/trash/`. Once the diff passes, the snapshot from
-step 1 can be deleted.
+Some residue is expected and harmless: the test books in the Calibre recycle bin (`.caltrash/`,
+which Calibre purges automatically) and in `.calibre-mcp-backups/trash/`.
+
+CAUTION: Delete the snapshot from step 1 only after the diff passes. It is your restore point.
 
 ---
 

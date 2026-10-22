@@ -6,7 +6,8 @@ stands in for Open Library, so ZERO real network traffic occurs (spec test-safet
 rule) — the facade orchestration is what's under test, not the HTTP client.
 
 LOOKUP-01: has ISBN + record -> advisory proposal, library byte-for-byte unchanged.
-LOOKUP-02: no ISBN -> found:false, no network (enricher never called).
+LOOKUP-02 (revised by ENRICH-04 TSEARCH-06): no ISBN and no usable title ->
+           found:false, no network (enricher never called).
 LOOKUP-03: unknown id -> BookNotFoundError; non-int -> InvalidInputError (pre-network).
 LOOKUP-04: comments proposal sourced from the record's (work) description.
 LOOKUP-05: an already-present target field is skipped, never proposed.
@@ -14,6 +15,15 @@ LOOKUP-06: no cover + record cover -> downloaded local_path; has cover -> cover:
 LOOKUP-07: known ISBN, no record -> found:false, not an error.
 LOOKUP-08: a fetch_record source error propagates (facade does not swallow it).
 LOOKUP-09: a cover download failure is non-fatal (metadata proposal still returned).
+
+ENRICH-04 (title/author search fallback when there is no usable ISBN):
+TSEARCH-01: search by title + primary author ("Unknown" author omitted); never
+            for a book with an ISBN.
+TSEARCH-03: a high match proposes the work description (comments) + cover only.
+TSEARCH-04: a non-high best match is reported, never proposed or downloaded.
+TSEARCH-05: no candidates -> found:false, "no record at source", match:null.
+TSEARCH-07: a search failure propagates; a failed description is non-fatal.
+TSEARCH-08: read-only (metadata.db unchanged).
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ from calibre_mcp.errors import (
     InvalidInputError,
 )
 from calibre_mcp.library import CalibreLibrary
-from calibre_mcp.openlibrary_client import OpenLibraryRecord
+from calibre_mcp.openlibrary_client import OpenLibraryRecord, SearchCandidate
 
 _RAW_ISBN = "978-0-553-29335-7"
 _NORMALIZED_ISBN = "9780553293357"
@@ -96,6 +106,9 @@ class _FakeEnricher:
         cover_error: Exception | None = None,
         cover_dir: Path | None = None,
         fetch_error: Exception | None = None,
+        candidates: list[SearchCandidate] | None = None,
+        search_error: Exception | None = None,
+        description: str | None = None,
     ) -> None:
         self._record = record
         self._cover_bytes = cover_bytes
@@ -105,6 +118,21 @@ class _FakeEnricher:
         self.fetch_calls = 0
         self.download_calls = 0
         self.received_isbn: str | None = None
+        self._candidates = candidates or []
+        self._search_error = search_error
+        self._description = description
+        self.search_calls: list[tuple[str, str | None]] = []
+        self.description_calls: list[str] = []
+
+    def search_works(self, title: str, author: str | None) -> list[SearchCandidate]:
+        self.search_calls.append((title, author))
+        if self._search_error is not None:
+            raise self._search_error
+        return self._candidates
+
+    def fetch_work_description(self, work_key: str) -> str | None:
+        self.description_calls.append(work_key)
+        return self._description
 
     def fetch_record(self, isbn: str) -> OpenLibraryRecord | None:
         self.fetch_calls += 1
@@ -191,11 +219,12 @@ def test_happy_path_proposes_gaps_and_leaves_library_unchanged(
 
 
 @pytest.mark.integration
-def test_no_isbn_returns_found_false_and_never_calls_enricher(
+def test_no_isbn_and_no_usable_title_returns_found_false_without_network(
     facade: CalibreLibrary, scratch_library: Path
 ) -> None:
-    # LOOKUP-02 + spec test (a): only a google id -> no-network found:false.
-    book_id = _seed_empty_book(scratch_library)
+    # LOOKUP-02 revised by TSEARCH-06: only a google id AND Calibre's "Unknown"
+    # title placeholder -> nothing to look up or search -> no network at all.
+    book_id = _seed_empty_book(scratch_library, title="Unknown")
     runner = CalibredbRunner(scratch_library)
     runner.set_metadata(book_id, {"identifiers": "google:abc123"})
     enricher = _FakeEnricher(OpenLibraryRecord("X", "Y", "Z", None))
@@ -206,9 +235,10 @@ def test_no_isbn_returns_found_false_and_never_calls_enricher(
     assert result == {
         "book_id": book_id,
         "found": False,
-        "reason": "no usable identifier (ISBN)",
+        "reason": "no usable identifier (ISBN) or title",
     }
-    assert enricher.fetch_calls == 0  # no network call
+    assert enricher.fetch_calls == 0  # no ISBN lookup
+    assert enricher.search_calls == []  # and no search
 
 
 @pytest.mark.integration
@@ -369,3 +399,261 @@ def test_all_present_with_cover_is_nothing_to_fill(
     assert result["proposed"] == {}
     assert result["skipped_present"] == ["comments", "publisher", "pubdate"]
     assert result["cover"] is None
+
+
+# ------------------------------------------- ENRICH-04: title/author search
+
+
+_HOBBIT_KEY = "/works/OL262758W"
+_HOBBIT_COVER = "https://covers.openlibrary.org/b/id/14627509-L.jpg"
+
+
+def _hobbit() -> SearchCandidate:
+    return SearchCandidate(
+        work_key=_HOBBIT_KEY,
+        title="The Hobbit",
+        authors=["J.R.R. Tolkien"],
+        cover_url=_HOBBIT_COVER,
+    )
+
+
+def _seed_titled_book(scratch_library: Path, title: str, author: str) -> int:
+    book_id = _seed_empty_book(scratch_library, title=title)
+    CalibredbRunner(scratch_library).set_metadata(book_id, {"authors": [author]})
+    return book_id
+
+
+@pytest.mark.integration
+def test_search_is_never_used_for_a_book_with_an_isbn(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-01 Must-not: the ISBN path runs unchanged.
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "J. R. R. Tolkien")
+    _set_isbn(scratch_library, book_id)
+    enricher = _FakeEnricher(None, candidates=[_hobbit()])
+    facade._enricher = enricher
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert enricher.search_calls == []
+    assert result["reason"] == "no record at source"
+
+
+@pytest.mark.integration
+def test_search_sends_title_and_primary_author(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-01: no ISBN -> search by title + primary author.
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "J. R. R. Tolkien")
+    enricher = _FakeEnricher(None)
+    facade._enricher = enricher
+
+    facade.enrich_from_identifier(book_id)
+
+    assert enricher.search_calls == [("The Hobbit", "J. R. R. Tolkien")]
+
+
+@pytest.mark.integration
+def test_search_omits_unknown_author(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-01: Calibre's "Unknown" author placeholder is not sent.
+    book_id = _seed_empty_book(scratch_library, title="The Hobbit")
+    enricher = _FakeEnricher(None)
+    facade._enricher = enricher
+
+    facade.enrich_from_identifier(book_id)
+
+    assert enricher.search_calls == [("The Hobbit", None)]
+
+
+@pytest.mark.integration
+def test_high_match_proposes_description_and_cover_only(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+) -> None:
+    # TSEARCH-03 + TSEARCH-08: exact payload; publisher/pubdate never proposed
+    # even though the book lacks both; nothing written to the library.
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "J. R. R. Tolkien")
+    enricher = _FakeEnricher(
+        None,
+        candidates=[_hobbit()],
+        description="A hobbit goes on an adventure.",
+        cover_bytes=_CANNED_COVER,
+        cover_dir=tmp_path,
+    )
+    facade._enricher = enricher
+    before = _db_digest(scratch_library)
+
+    result = facade.enrich_from_identifier(book_id)
+
+    cover = result.pop("cover")
+    assert result == {
+        "book_id": book_id,
+        "found": True,
+        "source": "openlibrary",
+        "identifier_used": None,
+        "match": {
+            "method": "search",
+            "confidence": "high",
+            "title": "The Hobbit",
+            "authors": ["J.R.R. Tolkien"],
+            "work_key": _HOBBIT_KEY,
+            "title_similarity": 1.0,
+            "author_similarity": 1.0,
+        },
+        "proposed": {"comments": "A hobbit goes on an adventure."},
+        "skipped_present": [],
+    }
+    assert cover["url"] == _HOBBIT_COVER
+    assert Path(cover["local_path"]).read_bytes() == _CANNED_COVER
+    assert enricher.description_calls == [_HOBBIT_KEY]
+    assert _db_digest(scratch_library) == before
+
+
+@pytest.mark.integration
+def test_high_match_never_overwrites_present_comments(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+) -> None:
+    # TSEARCH-03: comments proposed only when missing (gap-only, LOOKUP-05).
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "J. R. R. Tolkien")
+    CalibredbRunner(scratch_library).set_metadata(
+        book_id,
+        {"comments": "Mine.", "cover": str(_valid_cover_png(tmp_path / "c.png"))},
+    )
+    enricher = _FakeEnricher(None, candidates=[_hobbit()], description="Theirs.")
+    facade._enricher = enricher
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result["found"] is True
+    assert result["proposed"] == {}
+    assert "comments" in result["skipped_present"]
+    assert result["cover"] is None  # the book already has one
+
+
+@pytest.mark.integration
+def test_non_high_match_is_reported_but_never_proposed(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-04: same title, another author -> medium: shown, not proposed;
+    # no description fetched, no cover downloaded.
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "Someone Else")
+    enricher = _FakeEnricher(None, candidates=[_hobbit()], description="Theirs.")
+    facade._enricher = enricher
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no confident match",
+        "match": {
+            "method": "search",
+            "confidence": "medium",
+            "title": "The Hobbit",
+            "authors": ["J.R.R. Tolkien"],
+            "work_key": _HOBBIT_KEY,
+            "title_similarity": 1.0,
+            "author_similarity": 0.16,
+        },
+    }
+    assert enricher.description_calls == []
+    assert enricher.download_calls == 0
+
+
+@pytest.mark.integration
+def test_low_match_is_reported_but_never_proposed(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-04 (low branch): an unrelated best candidate is still only shown.
+    book_id = _seed_titled_book(scratch_library, "Zzz", "Someone")
+    enricher = _FakeEnricher(None, candidates=[_hobbit()], description="Theirs.")
+    facade._enricher = enricher
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no confident match",
+        "match": {
+            "method": "search",
+            "confidence": "low",
+            "title": "The Hobbit",
+            "authors": ["J.R.R. Tolkien"],
+            "work_key": _HOBBIT_KEY,
+            "title_similarity": 0.0,
+            "author_similarity": 0.3,
+        },
+    }
+    assert enricher.description_calls == []
+    assert enricher.download_calls == 0
+
+
+@pytest.mark.integration
+def test_match_similarities_are_rounded_to_two_decimals(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-02: "The Hobbits"/"J. R. R. Tolkein" vs "The Hobbit"/"J.R.R.
+    # Tolkien" scores 0.952.../0.923... -> still high, reported as 0.95/0.92.
+    book_id = _seed_titled_book(scratch_library, "The Hobbits", "J. R. R. Tolkein")
+    facade._enricher = _FakeEnricher(None, candidates=[_hobbit()], description="D.")
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result["match"]["confidence"] == "high"
+    assert result["match"]["title_similarity"] == 0.95
+    assert result["match"]["author_similarity"] == 0.92
+
+
+@pytest.mark.integration
+def test_no_candidates_is_no_record_with_null_match(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-05.
+    book_id = _seed_titled_book(scratch_library, "Obscure Book", "Nobody")
+    facade._enricher = _FakeEnricher(None, candidates=[])
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result == {
+        "book_id": book_id,
+        "found": False,
+        "reason": "no record at source",
+        "match": None,
+    }
+
+
+@pytest.mark.integration
+def test_search_failure_propagates_as_source_error(
+    facade: CalibreLibrary, scratch_library: Path
+) -> None:
+    # TSEARCH-07: a search transport/parse failure is a tool error.
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "J. R. R. Tolkien")
+    facade._enricher = _FakeEnricher(
+        None, search_error=EnrichmentSourceError("down", "url")
+    )
+
+    with pytest.raises(EnrichmentSourceError):
+        facade.enrich_from_identifier(book_id)
+
+
+@pytest.mark.integration
+def test_failed_description_still_returns_the_cover_proposal(
+    facade: CalibreLibrary, scratch_library: Path, tmp_path: Path
+) -> None:
+    # TSEARCH-07: a missing/failed description is non-fatal.
+    book_id = _seed_titled_book(scratch_library, "The Hobbit", "J. R. R. Tolkien")
+    facade._enricher = _FakeEnricher(
+        None,
+        candidates=[_hobbit()],
+        description=None,
+        cover_bytes=_CANNED_COVER,
+        cover_dir=tmp_path,
+    )
+
+    result = facade.enrich_from_identifier(book_id)
+
+    assert result["found"] is True
+    assert result["proposed"] == {}
+    assert result["cover"]["url"] == _HOBBIT_COVER

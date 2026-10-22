@@ -170,6 +170,7 @@ def test_library_stats_empty_library_returns_same_shape(scratch_library: Path):
         "placeholder_pubdate_0101": 0,
         "series_unused": True,
         "rating_unused": True,
+        "missing_cover_ids": [],
         "duplicate_title_groups": [],
     }
 
