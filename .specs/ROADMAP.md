@@ -146,8 +146,11 @@ books missing `comments`, 62.9% missing `publisher`, 64.1% missing `identifiers`
 - **ENRICH-02 — Route enrichment through the existing plan→confirm gate.** No new mutation path —
   enrichment is just another *source* of proposed values fed into `update_metadata`'s diff/confirm
   handshake.
-- **ENRICH-03 (P3 candidate) — Batch review mode.** "Enrich all books missing comments" returns N
-  independent plans to walk through — never a silent bulk apply.
+- **ENRICH-03 — Batch review mode. ✅ Shipped & Verified.** `enrich_missing(limit, offset)`: a
+  bounded, read-only sweep selects the books that carry an ISBN and are missing an enrichable field
+  and returns N independent proposals (via the existing ENRICH-01 path) — never a silent bulk apply
+  (AD-027). Default cap 25 / ceiling 100 / offset paging; per-book failure isolated. See
+  `.specs/features/enrichment-batch/`.
 
 **Phase-gate (KPI):** meaningful drop in `metadata_completeness` gaps (STATS-01's own output)
 after a curation session, and every book has a viewable cover.

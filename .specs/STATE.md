@@ -128,10 +128,107 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
   single-library model (AD-007). The productize-the-pattern and vertical-that-pays bets (Phases B/C)
   are strategy, recorded in the roadmap's Strategic Horizon, not committed calibre-mcp features.
 
+- **AD-024 — A tool may return MCP image content; the read layer resolves the path, FastMCP reads
+  the bytes.** Established by COVER-01 (`read_cover`), the project's first non-text tool result.
+  The read layer resolves and validates the file path (same `is_file()` discipline as
+  `format_files`, AD-017); `FastMCP.Image(path=...)` performs the byte read + base64 encode — our
+  code never reads image bytes, so no new I/O kind enters the facade/tool and the
+  reads-go-through-the-read-layer invariant holds. `_map_errors` is now generic (`Callable[..., T]
+  -> Callable[..., T]`, PEP 695 syntax) so a non-`dict` tool result typechecks; every existing
+  dict-returning tool is unaffected (pure typing change). **SPEC_DEVIATION from design.md:** the
+  design specified the tool's return annotation as `Image | dict`, but the installed mcp SDK
+  (1.28.1) crashes at tool *registration* on that annotation — building the union's
+  structured-output schema calls `pydantic.create_model()` unconditionally (even under
+  `structured_output=False`), and pydantic has no schema for `Image` (`PydanticSchemaGenerationError`).
+  `read_cover` is annotated `-> Any` instead; verified empirically that this produces the identical
+  runtime wire behavior (FastMCP's content conversion dispatches on the actual returned value's
+  type, not the static annotation) and the same `output_schema = None` either way — so the intended
+  contract (image content on has-cover, structured dict on no-cover) is unchanged, only the
+  annotation differs from the design doc. Future non-text tool results should default straight to
+  `-> Any` rather than a real `Image | dict` union.
+
+- **AD-025 — Dedicated `set_cover` tool, not a field on `update_metadata`.** Established by
+  COVER-02 (`set_cover`). A cover's value is a **filesystem image path**, not a metadata string —
+  it needs different validation (`is_file()` + an image-extension whitelist) and a replace-vs-add
+  plan (`current_has_cover`, reusing `cover_file` from AD-024/COVER-01), so folding it into
+  `update_metadata`'s string-field whitelist would mix a path-typed input into a string editor and
+  complicate that tool's diff/validation. **The durable lesson**: `calibredb set_metadata --field
+  cover:<path>` **silently no-ops on a missing/unreadable path** (verified) — cover-setting MUST
+  pre-validate the file exists (`is_file()` + extension) before any backup/write, and MUST re-read
+  the cover state after apply to demonstrate the result, never assert it. **SPEC_DEVIATION from
+  design.md's Risks table:** the design additionally assumed a *decoded* bad image (valid
+  extension, undecodable content) would also silently no-op the same way, needing the identical
+  re-read defense. Empirically verified 2026-07-31 this is not what happens — a genuine decode
+  failure makes `calibredb` crash with a non-zero exit (`CalibredbError` propagates loudly, does
+  NOT silently no-op); only the missing-path case is silent. The re-read-to-demonstrate discipline
+  is still correct practice (defense in depth, matches the sibling mutations' "demonstrated not
+  asserted" pattern) — it just was never observed catching a decode failure in practice, since that
+  case already fails loudly on its own.
+
+- **AD-026 — First outbound-network policy: HTTP is a fourth I/O kind, confined and bounded.**
+  Established by ENRICH-01 (`identifier-lookup`), the project's first outbound network call.
+  **Context:** ENRICH-01 looks up gap-filling metadata from Open Library keyed on a book's ISBN —
+  the first time the server reaches the internet. This does NOT revise AD-002/003: those keep the
+  *transport* local stdio with no listening surface; this is an *outbound* GET the tool makes
+  per-call, user-initiated (the tool call is the opt-in), sending only the ISBN (no secrets, no PII).
+  **Decision:** all HTTP + cover-download I/O lives in one dedicated sibling module
+  (`openlibrary_client.py`); the facade *orchestrates* but never *performs* the network I/O —
+  extending the "one module per external I/O kind" invariant (AD-014 CLIs, AD-021 filesystem walk)
+  to name **HTTP** as the fourth kind. Every request is bounded — default 10 s timeout + **at most
+  one retry** — so the stdio server can never hang; every transport / HTTP ≥ 400 / parse failure
+  maps to a single `EnrichmentSourceError` (a `CalibreMcpError`, so `_map_errors` turns it into a
+  clean `ToolError`) — never a crash, never partial state. The client takes an injectable `http_get`
+  seam so **tests never touch the real Open Library** — the network analog of the never-touch-the-
+  real-library write rule, non-negotiable. Covers are fetched via the non-rate-limited cover-**id**
+  URL (id/OLID are exempt from Open Library's 100-req / 5-min limit; by-ISBN is not). **Consequences:**
+  the lookup is read-only — no plan→confirm gate, no backup, nothing is written (applying is
+  ENRICH-02 / COVER-02, which gate); a failed cover or description follow-up is **non-fatal**
+  (best-effort) so a failed image never loses the core text proposal; stdlib `urllib.request` covers
+  the GETs with no new dependency (keeps the single-dep `uvx` install, AD-023). **Numbering:** AD-025
+  was taken by COVER-02, so this is AD-026.
+
+- **AD-027 — Batch outbound policy: a bounded, read-only sweep, never a bulk apply.**
+  Established by ENRICH-03 (`enrichment-batch`), the batch twin of ENRICH-01. **Context:** ENRICH-01
+  (AD-026) explicitly *deferred* the rate-limit question ("revisit only if ENRICH-03 batches hit the
+  limit"); ENRICH-03 is that revisit — one call sweeps the shelf's enrichable-but-incomplete books
+  and returns N proposals. **Decision:** the outbound volume is bounded by a **default cap (25) + hard
+  ceiling (100) + `offset` paging**, not a token-bucket limiter (still single-user, low volume); a
+  bound outside `1..100` (or a non-int / negative offset) is rejected as `InvalidInputError`
+  **before any selection or network call** — never clamped into a huge sweep. The batch is
+  **read-only advisory** (AD-016) — no `calibredb`, no backup, no confirmation token — and **never
+  bulk-applies**: `results` are proposals the host walks and applies per book through the ENRICH-02
+  chain. It adds **no new outbound site** — the sole HTTP module (AD-026) is reached only *through*
+  `enrich_from_identifier`, one sequential lookup per candidate (each carrying LOOKUP-10's own
+  timeout/retry). Per-book failure is **isolated** (AD-020 best-effort bucketing): one candidate's
+  `EnrichmentSourceError` becomes that item's `status:"error"` and the sweep continues — a single
+  offline blip never discards the other proposals. Candidate selection is a reader SQL query reusing
+  the *exact* `_stats_completeness` "missing" rules (comments/publisher/placeholder-pubdate) + a
+  non-blank `isbn` guard — one business rule, no drift. **Consequences:** the result is a bucketed
+  `{proposed, no_new_data, no_record, error}` summary + `candidate_count` vs `processed` so the host
+  can tell more remain and page them; nothing in the payload suggests a write happened (no token, no
+  `applied` field). Tool: `enrich_missing` (sibling of `enrich_from_identifier`). One documented,
+  intentional SPEC note: the residual "isbn present but normalizes to empty" negative folds into
+  `no_record` (rare, guarded by the SQL `trim(val) != ''`).
+- **AD-028 — Library path has no single source of truth across the two consumers (ops debt).**
+  **Context:** the library moved on disk (`~/Documents/BibliotecaCalibre` →
+  `~/Documents/livros/biblioteca`) during a workspace reorg. Nothing in *this* repo broke — the
+  server correctly reads `CALIBRE_LIBRARY_PATH` (AD-007) — but the path is duplicated in **two
+  places the server doesn't own**: the Calibre GUI config (`~/.config/calibre/global.py.json:
+  library_path`) and the host's MCP env (`.claude.json: mcpServers.calibre.env`). Moving the
+  library means editing both by hand; a stale env fails fast at startup (`ConfigError`) rather than
+  silently, which is the intended safety, but the duplication is friction. **Decision:** accept the
+  duplication for now — a single-user, single-library tool (AD-007) doesn't justify a resolver, and
+  a config-discovery feature would reintroduce the very ambiguity AD-007 removed. **Debt tracked:**
+  if the library moves again and the double-edit bites, revisit — options are (a) a tiny
+  `calibre-mcp doctor` that prints/validates the resolved path so the host copies one value, or
+  (b) reading the GUI's `library_path` as a fallback when the env is unset. Neither is scheduled.
+  The operational contract (both files must agree) is documented host-side in
+  `~/projects/10_dotfiles/docs/livros-calibre.md`.
+
 ## Backlog — deferred (post-P2)
 
-- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03 all shipped & Verified;
-  see Handoff. Next up is Phase 3 (Covers & Enrichment) — see `.specs/ROADMAP.md`.)
+- (empty — Phase 2 fully closed: STATS-01 + BULK-01/02/03 + ORGN-01/02/03/04 all shipped & Verified;
+  see Handoff. Phase 3 (Covers & Enrichment) now underway — see `.specs/ROADMAP.md`.)
 
 ## Environment
 
@@ -142,10 +239,10 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
 ## Handoff
 
 - **Shipped & Verified:** Phase 0 (P1 + P2), Phase 1 (STATS-01), and Phase 2 in full — BULK-01 +
-  BULK-02 + BULK-03 + ORGN-01 + ORGN-02 + ORGN-03 — all committed with independent-Verifier PASS
-  reports. **Phase 2 phase-gate is closed** (2026-07-31): a full curation session (retag a batch,
-  fix an author's name everywhere, resolve a duplicate group, import a folder) never requires the
-  Calibre GUI.
+  BULK-02 + BULK-03 + ORGN-01 + ORGN-02 + ORGN-03 + ORGN-04 — all committed with
+  independent-Verifier PASS reports. **Phase 2 phase-gate is closed** (2026-07-31): a full curation
+  session (retag a batch, fix an author's name everywhere, resolve a duplicate group, import a
+  folder, fix a series' name) never requires the Calibre GUI.
   - **P1 / P2** (`calibre-management`, `calibre-management-p2`): read + curate + convert +
     find_duplicates + email. `SqliteReader` constructor takes `(db_path, library_path)`.
   - **STATS-01** (`library-stats`, Phase 1): `calibre://library/stats` MCP resource (Option A,
@@ -201,25 +298,108 @@ fast reads via SQLite, integrity-safe writes via `calibredb`.
     runs, author 3/3 + verifier 4/4, 7/7 killed) **plus a structural code-trace** confirming the
     removal lines are unreachable except after a fully-completed attach loop — the data-safety
     ordering is a guarantee, not just a tested behavior. `.specs/features/merge-duplicate-group/validation.md`.
-- **In progress — ORGN-04** (`series-rename`, Phase 2 follow-on, closes the AD-019 author/tag/series
-  organization triad): `rename_series` — series-scoped sibling of ORGN-01/02, T1-T3 implemented
-  (`books_by_series` discovery, facade plan→confirm batch, MCP tool), all commits green
-  (ruff/mypy/pytest). **Status: Implementing, awaiting independent Verifier PASS** — T4 (this entry)
-  is the traceability closeout, not the Verified mark. Key divergence from ORGN-01/02: series is a
-  single-valued field, so there is no list resolver — the apply writes `{"series": new_series}`
-  ONLY, never `series_index`, so each book's position survives the rename (SRENAME-07, empirically
-  verified against `calibredb` and covered by a fractional-index (`7.5`) round-trip test). The real
-  library has 0 books in any series (`series_unused`), so all new tests seed a `scratch_library`
-  rather than anchoring on the real one. Spec/design/tasks at `.specs/features/series-rename/`.
-- **Next:** dispatch the independent Verifier for ORGN-04 (spec-anchored check + discrimination
-  sensor) — Execute is not done until it PASSes. After that: Phase 3 (Covers & Enrichment) — first
-  feature needing a new outbound-network AD (see ROADMAP.md's open architectural question). Full
-  roadmap in `.specs/ROADMAP.md`.
+- **ORGN-04** (`series-rename`, Phase 2 follow-on, closes the AD-019 author/tag/series organization
+  triad): `rename_series` — series-scoped sibling of ORGN-01/02 (`books_by_series` discovery, facade
+  plan→confirm batch, MCP tool). Key divergence from ORGN-01/02: series is a single-valued field, so
+  there is no list resolver — the apply writes `{"series": new_series}` ONLY, never `series_index`,
+  so each book's position survives the rename (SRENAME-07, empirically verified against `calibredb`
+  and covered by a fractional-index (`7.5`) round-trip test). The real library has 0 books in any
+  series (`series_unused`), so all tests seed a `scratch_library` rather than anchoring on the real
+  one. **Shipped & Verified** (independent Verifier PASS, 8/8 SRENAME matched spec-defined outcomes,
+  3/3 discrimination-sensor mutants killed, `.specs/features/series-rename/validation.md`,
+  commit `b4f0598`) — this Handoff entry was simply never updated after that Verified commit until
+  now (found while closing out COVER-01); Phase 2 was in fact fully closed at that point.
+- **COVER-01** (`cover-read`, Phase 3 — Covers & Metadata Enrichment): `read_cover` — T1-T3
+  implemented (`SqliteReader.cover_file` has_cover-keyed path resolution, `CalibreLibrary
+  .read_cover` dict facade, `read_cover` MCP tool returning viewable image content). **Shipped &
+  Verified** (commit `94044f4`): independent Verifier PASS, 5/5 RCOVER requirements matched
+  spec-defined outcomes, 3/3 discrimination-sensor mutants killed, full build gate 318 passed.
+  First tool to return non-text (image) content — see **AD-024** (incl. a SPEC_DEVIATION: `-> Any`
+  return annotation instead of design's `Image | dict`, forced by an mcp-SDK schema-generation
+  crash on that union, same runtime wire behavior verified). Test-seeding note: a real sample
+  `.epub`'s embedded cover gets auto-extracted by `calibredb add`, so cover/no-cover fixtures seed
+  via `calibredb add --empty` + a stdlib-only zlib-PNG helper instead, for deterministic has_cover
+  state. `.specs/features/cover-read/validation.md`. (This entry was stale — recorded "Implementing"
+  in error until fixed while closing out COVER-02.)
+- **COVER-02** (`cover-set`, Phase 3, mutating sibling of COVER-01 — closes the Phase-3 covers
+  pair): `set_cover` — `CalibreLibrary.set_cover` plan→confirm facade reusing `cover_file`/
+  `set_metadata` unchanged, plus the `set_cover` MCP tool. **Shipped & Verified**: independent
+  Verifier PASS, 7/7 SCOVER requirements + L-001 matched spec-defined outcomes (evidence-or-zero),
+  3/3 discrimination-sensor mutants killed, full build gate 329 passed.
+  `.specs/features/cover-set/validation.md`. Cover-typed twin of `update_metadata`: validates the
+  image file (`is_file()` + extension whitelist) BEFORE any backup/write, since `calibredb`
+  silently no-ops on a bad path; apply re-reads `cover_file` to demonstrate the result rather than
+  asserting it. New **AD-025** (the dedicated-tool decision + the silent-no-op lesson + a
+  SPEC_DEVIATION: a genuine decode failure was empirically found — and independently reproduced by
+  the Verifier — to raise loudly, `CalibredbError`, not silently no-op as design.md assumed).
+  **Phase-3 covers pair now closed** (COVER-01 + COVER-02 both Shipped & Verified).
+- **ENRICH-01** (`identifier-lookup`, Phase 3 — the project's first outbound-network feature):
+  `enrich_from_identifier` — a **read-only** ISBN lookup that proposes gap-filling
+  `comments`/`publisher`/`pubdate` from Open Library plus a downloaded cover, writing NOTHING (the
+  advisory precedent of `find_duplicates`, AD-016). New sibling module `openlibrary_client.py` (the
+  sole outbound-I/O site: Books API + edition→work description follow-up + cover-id download,
+  bounded 10 s timeout + ≤1 retry, injectable `http_get` seam so tests never hit the real network),
+  new `EnrichmentSourceError` in the taxonomy, `CalibreLibrary.enrich_from_identifier` facade
+  (gap-only proposal reusing the `0101-01-01%` placeholder-pubdate rule + `cover_file` COVER-01),
+  and the `enrich_from_identifier` MCP tool. New **AD-026** (first outbound-network policy).
+  **Shipped & Verified**: independent Verifier PASS (2 iterations — the first flagged two coverage
+  gaps, ISBN upper-case edge + LOOKUP-10 User-Agent, both closed by test-only commit `f32dc94`),
+  LOOKUP-01..10 all matched spec-defined outcomes (evidence-or-zero), 6/6 discrimination-sensor
+  mutants killed across client + facade layers, full suite 361 passed; mypy + ruff clean.
+  `.specs/features/identifier-lookup/validation.md`. Test-seeding notes: `calibredb add --empty`
+  yields the placeholder pubdate `0101-01-01%` (so an empty book reads as pubdate-missing) and
+  stores identifiers verbatim (hyphens/lower-case `x` preserved → the facade normalizes); the
+  real outbound `_urllib_get` is exercised via a monkeypatched `urlopen` (UA + timeout + error
+  wrapping), everything else through the injectable `http_get` seam (zero real network).
+  **Phase-3 Covers & Enrichment: covers pair (COVER-01/02) + ENRICH-01 now closed.**
+- **ENRICH-02** (`enrichment-apply`, Phase 3 — routes ENRICH-01's proposal through the existing
+  gates): no new tool. User-decided scope (2026-08-07): `enrich_from_identifier`'s `proposed` dict
+  is already a strict subset of `update_metadata`'s `ALLOWED_EDIT_FIELDS`, so the host chains
+  `enrich_from_identifier` → `update_metadata` (fields) → `set_cover` (cover) — three already-Shipped
+  tools, zero new mutation path. Deliverable: new integration test module
+  (`tests/integration/test_enrichment_apply.py`, 5 tests / 7 ACs) proving the round-trip, plus a
+  docstring cross-reference on `enrich_from_identifier` documenting the two-step flow and two skip
+  rules. **Two spec assumptions were corrected against empirically observed `calibredb` behavior**
+  while writing the tests: an empty `fields` dict does NOT no-op at `update_metadata`'s apply step —
+  it raises `CalibredbError` (`calibredb` rejects a zero-field `set_metadata` call); and `calibredb`
+  normalizes a partial `pubdate` string (`"April 2009"`) into a full ISO datetime
+  (`"2009-04-15 00:00:00+00:00"`) rather than preserving it verbatim — both documented as
+  SPEC_DEVIATION in `.specs/features/enrichment-apply/design.md` and reflected in the final spec
+  text. **Shipped & Verified**: independent Verifier PASS, 7/7 ENRICH2 requirements matched
+  spec-defined outcomes (evidence-or-zero), 3/3 discrimination-sensor mutants killed across
+  `_gap_proposal`/`update_metadata`/`set_cover`, full suite 366 passed (361 + 5 new, no count
+  regression); mypy + ruff clean. `.specs/features/enrichment-apply/validation.md`. Commits
+  `b57ba83` (tests + spec/design) / `ed5db75` (docstring).
+- **ENRICH-03** (`enrichment-batch`, Phase 3 — batch review mode, the batch twin of ENRICH-01):
+  new tool `enrich_missing(limit=None, offset=0)`. A bounded, **read-only** sweep (new **AD-027**):
+  selects the books that carry an ISBN AND are missing an enrichable field (new reader query
+  `enrichable_candidates`, reusing the exact `_stats_completeness` "missing" rules), looks each up
+  through the **existing** `enrich_from_identifier` path (zero new network/proposal logic), and
+  returns one advisory proposal per book + a bucketed `{proposed, no_new_data, no_record, error}`
+  summary — writing NOTHING, NEVER bulk-applying (host walks `results`, applies each per book via the
+  ENRICH-02 chain). Bounded: default cap 25 / ceiling 100 / `offset` paging; a bad bound is rejected
+  (`InvalidInputError`) before any selection or network call. Per-book `EnrichmentSourceError` is
+  isolated to that item (`status:"error"`) and the sweep continues. **Shipped & Verified**:
+  independent Verifier PASS, 9/9 ENRICH3 requirements matched spec-defined outcomes (evidence-or-zero),
+  4/4 discrimination-sensor mutants killed (isbn guard / error-isolation / cap constant / classifier).
+  Full suite **387 passed** (366 + 21 new: 5 reader + 13 batch + 3 e2e); mypy + ruff clean. (The
+  Verifier's gate observed 386 at T3, before the ENRICH3-07 end-to-end cap test `6ef64c7` was added.)
+  `.specs/features/enrichment-batch/validation.md`. Commits `0cec3d6` (reader) / `1e56ddd`
+  (facade) / `6b77862` (tool) / `6ef64c7` (end-to-end cap test closing the Verifier's ENRICH3-07
+  caveat). **Phase-3 ENRICH cluster (01/02/03) now closed.**
+- **Next:** Phase 3's last named candidate (ENRICH-03) is done. Re-check the **Phase-3 phase-gate**
+  (meaningful drop in `metadata_completeness` gaps after a curation session + every book has a
+  viewable cover) against a real run to decide whether Phase 3 can formally close, or whether an
+  un-named gap (e.g. a Google Books / second enrichment source, or a cover-batch) is worth opening.
 - **Specs:** `calibre-management` (P1, 31 req), `calibre-management-p2` (P2, 3 req),
   `library-stats` (STATS-01), `bulk-metadata-edit` (BULK-01, 9 req `BEDIT`),
   `bulk-convert` (BULK-02, 6 req `BCONV`), `folder-import` (BULK-03, 7 req `BIMPORT`),
   `author-rename` (ORGN-01, 8 req `ARENAME`), `tag-rename` (ORGN-02, 8 req `TRENAME`),
   `merge-duplicate-group` (ORGN-03, 8 req `MERGE`), `series-rename` (ORGN-04, 8 req `SRENAME`,
-  Implementing). Stack: uv + pytest + ruff; test-safety rule enforced via the `scratch_library`
-  fixture (writes never touch the real library). Full build gate re-run as the T4 closeout
-  regression: 307 passed, 0 failed; mypy + ruff clean.
+  Verified), `cover-read` (COVER-01, 5 req `RCOVER`, Verified), `cover-set` (COVER-02, 7 req
+  `SCOVER`, Verified), `identifier-lookup` (ENRICH-01, 10 req `LOOKUP`, Verified),
+  `enrichment-apply` (ENRICH-02, 7 req `ENRICH2`, Verified),
+  `enrichment-batch` (ENRICH-03, 9 req `ENRICH3`, Verified). Stack: uv + pytest + ruff;
+  test-safety rule enforced via the `scratch_library` fixture (writes never touch the real
+  library) + the injectable `http_get` seam (tests never touch the real Open Library).
+  Full build gate as of ENRICH-03's closeout: 387 passed, 0 failed; mypy + ruff clean.

@@ -22,8 +22,14 @@ from .calibredb_runner import CalibredbRunner
 from .config import Config, load_smtp_config
 from .confirmation import plan_token, verify
 from .ebook_convert_runner import EbookConvertRunner
-from .errors import BookNotFoundError, CalibreMcpError, InvalidInputError
+from .errors import (
+    BookNotFoundError,
+    CalibreMcpError,
+    EnrichmentSourceError,
+    InvalidInputError,
+)
 from .folder_scan import scan_ebook_files
+from .openlibrary_client import OpenLibraryClient, OpenLibraryRecord
 from .rename_resolve import resolve_renamed_values
 from .sqlite_reader import Book, SqliteReader
 
@@ -65,9 +71,35 @@ ALLOWED_EDIT_FIELDS = {
 _RATING_MIN = 0
 _RATING_MAX = 10
 
+# ENRICH-01: the gap-fillable target fields, mapping each book field (also the
+# proposal key) to the ``OpenLibraryRecord`` attribute that supplies its value.
+# ``comments`` is sourced from the work ``description`` (LOOKUP-04).
+_ENRICH_FIELDS = (
+    ("comments", "description"),
+    ("publisher", "publisher"),
+    ("pubdate", "pubdate"),
+)
+
+# ENRICH-01: Calibre's placeholder "no real date" pubdate — the SAME rule
+# ``library_stats`` uses (``pubdate LIKE '0101-01-01%'``); a pubdate that starts
+# with this counts as missing, not present (LOOKUP-05).
+_PLACEHOLDER_PUBDATE_PREFIX = "0101-01-01"
+
+# ENRICH-03: bound the batch's outbound-call volume (AD-027). ``DEFAULT`` is
+# processed when no ``limit`` is given; ``MAX`` is the hard ceiling a caller may
+# request — a larger ``limit`` is rejected as invalid input, never clamped into a
+# huge sweep. ``offset`` pages the rest across calls.
+ENRICH_BATCH_DEFAULT = 25
+ENRICH_BATCH_MAX = 100
+
+# COVER-02: extensions ``set_cover`` accepts as a local cover image, validated
+# before any backup/write (calibredb silently no-ops on a bad path, design Risks).
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
 # Operation names bound into the plan token so the applied op is provably the
 # reviewed op (AD-012). Must stay stable between the plan and apply calls.
 _OP_UPDATE = "update_metadata"
+_OP_SET_COVER = "set_cover"
 _OP_REMOVE = "remove_book"
 _OP_EMAIL = "email_book"
 _OP_UPDATE_BULK = "update_metadata_bulk"
@@ -107,6 +139,7 @@ class CalibreLibrary:
         self._runner = CalibredbRunner(config.library_path)
         self._converter = EbookConvertRunner()
         self._mailer = CalibreSmtpRunner()
+        self._enricher = OpenLibraryClient()  # ENRICH-01: outbound-I/O seam
 
     def search_books(self, query: str) -> list[Book]:
         """Resolve ids via ``calibredb search`` then hydrate them (SEARCH-01).
@@ -142,6 +175,218 @@ class CalibreLibrary:
         """Return one book's full record; propagates ``BookNotFoundError``
         (VIEW-01/02) and ``InvalidInputError`` for a non-int id (VIEW-03)."""
         return self._reader.get_book(book_id)
+
+    def read_cover(self, book_id: int) -> dict[str, Any]:
+        """Report cover presence + resolved path (RCOVER-01/02/03/05).
+
+        Pure read: propagates ``BookNotFoundError`` (unknown id) and
+        ``InvalidInputError`` (``has_cover`` true but ``cover.jpg`` missing on
+        disk) from ``cover_file``. No backup, no runner, no network.
+        """
+        cover = self._reader.cover_file(book_id)
+        return {
+            "book_id": book_id,
+            "has_cover": cover is not None,
+            "cover_path": str(cover) if cover is not None else None,
+        }
+
+    def enrich_from_identifier(self, book_id: int) -> dict[str, Any]:
+        """Look up missing metadata for a book by its ISBN — read-only (ENRICH-01).
+
+        Resolves the book (``BookNotFoundError``/``InvalidInputError`` before any
+        network, LOOKUP-03), normalizes its ``isbn`` (no ISBN -> a no-network
+        ``found: false``, LOOKUP-02), fetches an Open Library record
+        (``EnrichmentSourceError`` on transport/parse failure LOOKUP-08; a clean
+        miss -> ``found: false`` LOOKUP-07), then proposes values ONLY for the
+        fields the book is missing (LOOKUP-04/05) plus a best-effort downloaded
+        cover if the book lacks one (LOOKUP-06/09). Writes NOTHING to the library:
+        no ``calibredb`` call, no backup, no confirmation token — the proposal is
+        advisory, applied via the existing plan->confirm gates (ENRICH-02): pass
+        ``proposed`` verbatim as ``update_metadata``'s ``fields`` (their key sets
+        already match), and ``cover["local_path"]`` verbatim as ``set_cover``'s
+        ``image_path`` — two ordinary calls, no dedicated apply tool. Skip both
+        calls when there is nothing to apply: an empty ``proposed`` FAILS at
+        ``update_metadata``'s apply step (``calibredb`` rejects a zero-field
+        write) rather than no-op'ing, and a ``None`` ``cover["local_path"]``
+        FAILS ``set_cover`` with a bare ``TypeError`` rather than a clean error.
+        """
+        book = self._reader.get_book(book_id)  # LOOKUP-03, before any network
+        isbn = self._normalize_isbn(book.identifiers.get("isbn"))
+        if not isbn:  # LOOKUP-02: nothing to look up, no network call
+            return {
+                "book_id": book_id,
+                "found": False,
+                "reason": "no usable identifier (ISBN)",
+            }
+
+        record = self._enricher.fetch_record(isbn)  # LOOKUP-08 propagates
+        identifier_used = {"type": "isbn", "value": isbn}
+        if record is None:  # LOOKUP-07: known ISBN, no record at source
+            return {
+                "book_id": book_id,
+                "found": False,
+                "identifier_used": identifier_used,
+                "reason": "no record at source",
+            }
+
+        proposed, skipped = self._gap_proposal(book, record)
+        return {
+            "book_id": book_id,
+            "found": True,
+            "source": "openlibrary",
+            "identifier_used": identifier_used,
+            "proposed": proposed,
+            "skipped_present": skipped,
+            "cover": self._propose_cover(book_id, record),
+        }
+
+    def enrich_missing(
+        self, limit: int | None = None, offset: int = 0
+    ) -> dict[str, Any]:
+        """Batch review: propose enrichment for incomplete books (ENRICH-03).
+
+        Selects the books that carry an ISBN AND are missing an enrichable field,
+        looks each one up through the EXISTING ``enrich_from_identifier`` path, and
+        returns one advisory proposal per book plus an aggregate summary — writing
+        NOTHING (no ``calibredb`` call, no backup, no token; AD-016/AD-027). It
+        NEVER bulk-applies: the host walks ``results`` and applies each through the
+        ENRICH-02 chain (``update_metadata`` + ``set_cover``) per book.
+
+        Bounded (AD-027): at most ``limit`` candidates (default
+        ``ENRICH_BATCH_DEFAULT``, hard ceiling ``ENRICH_BATCH_MAX``); ``offset``
+        pages the rest. A bad bound
+        (``limit`` <=0 or >ceiling, negative ``offset``, non-int) is rejected as
+        ``InvalidInputError`` BEFORE any selection or network call. A single book's
+        ``EnrichmentSourceError`` becomes that item's ``status:"error"`` and the
+        sweep continues — one blip never discards the other proposals (ENRICH3-04).
+        """
+        effective_limit = self._validate_batch_bounds(limit, offset)
+        total, candidate_ids = self._reader.enrichable_candidates(
+            effective_limit, offset
+        )
+        summary = {"proposed": 0, "no_new_data": 0, "no_record": 0, "error": 0}
+        results: list[dict[str, Any]] = []
+        for book_id in candidate_ids:  # sequential, each with LOOKUP-10's own bound
+            try:
+                payload = self.enrich_from_identifier(book_id)
+            except EnrichmentSourceError as exc:  # ENRICH3-04: per-book isolation
+                results.append(
+                    {"book_id": book_id, "status": "error", "reason": str(exc)}
+                )
+                summary["error"] += 1
+                continue
+            status = self._classify_enrichment(payload)
+            results.append({**payload, "status": status})
+            summary[status] += 1
+        return {
+            "candidate_count": total,
+            "processed": len(results),
+            "limit": effective_limit,
+            "offset": offset,
+            "results": results,
+            "summary": summary,
+        }
+
+    @staticmethod
+    def _validate_batch_bounds(limit: int | None, offset: int) -> int:
+        """Reject a bad batch bound; return the effective limit (ENRICH3-08).
+
+        ``bool`` is excluded as a non-int (it is an ``int`` subclass); ``limit``
+        must be 1..``ENRICH_BATCH_MAX``; ``offset`` must be a non-negative int.
+        """
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise InvalidInputError(
+                f"offset must be a non-negative integer, got {offset!r}"
+            )
+        if limit is None:
+            return ENRICH_BATCH_DEFAULT
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise InvalidInputError(f"limit must be an integer, got {limit!r}")
+        if limit < 1 or limit > ENRICH_BATCH_MAX:
+            raise InvalidInputError(
+                f"limit must be between 1 and {ENRICH_BATCH_MAX}, got {limit}"
+            )
+        return limit
+
+    @staticmethod
+    def _classify_enrichment(payload: dict[str, Any]) -> str:
+        """Bucket a successful ``enrich_from_identifier`` result (ENRICH3-02/03).
+
+        ``no_record`` when the source returned nothing (``found`` false, folding
+        the rare non-normalizable-ISBN negative); ``proposed`` when there is
+        something to fill (a non-empty ``proposed`` or a downloaded ``cover``);
+        ``no_new_data`` when found but the record offered no missing value. A
+        cover whose download failed (``local_path`` null) is nothing to apply:
+        ``set_cover`` cannot take it.
+        """
+        if not payload.get("found"):
+            return "no_record"
+        cover = payload.get("cover")
+        if payload.get("proposed") or (cover is not None and cover.get("local_path")):
+            return "proposed"
+        return "no_new_data"
+
+    @staticmethod
+    def _normalize_isbn(raw: str | None) -> str | None:
+        """Strip non-alphanumerics and upper-case an ISBN; empty/absent -> None."""
+        if not raw:
+            return None
+        normalized = "".join(ch for ch in raw if ch.isalnum()).upper()
+        return normalized or None
+
+    def _gap_proposal(
+        self, book: Book, record: OpenLibraryRecord
+    ) -> tuple[dict[str, str], list[str]]:
+        """Split the target fields into gap-fill proposals vs already-present.
+
+        A field the book is missing gets the record's value (when the record has
+        one) in ``proposed``; a field already populated is named in
+        ``skipped_present`` and never proposed (LOOKUP-05, gap-only).
+        """
+        proposed: dict[str, str] = {}
+        skipped: list[str] = []
+        for book_field, record_attr in _ENRICH_FIELDS:
+            if self._field_missing(book, book_field):
+                value = getattr(record, record_attr)
+                if value is not None:
+                    proposed[book_field] = value
+            else:
+                skipped.append(book_field)
+        return proposed, skipped
+
+    @staticmethod
+    def _field_missing(book: Book, field: str) -> bool:
+        """Is ``field`` empty on the book? ``pubdate`` also counts the placeholder.
+
+        Reuses ``library_stats``' placeholder-pubdate rule so "missing" means the
+        same thing across the project — one business rule, no drift (LOOKUP-05).
+        """
+        value = getattr(book, field)
+        if value is None:
+            return True
+        if field == "pubdate":
+            return str(value).startswith(_PLACEHOLDER_PUBDATE_PREFIX)
+        return isinstance(value, str) and value.strip() == ""
+
+    def _propose_cover(
+        self, book_id: int, record: OpenLibraryRecord
+    ) -> dict[str, Any] | None:
+        """Best-effort cover download for a book that lacks one (LOOKUP-06/09).
+
+        ``None`` when the record has no cover or the book already has one (don't
+        propose replacing it). Otherwise the cover-id image is downloaded to a
+        temp file; a download failure is non-fatal — the metadata proposal still
+        stands and the cover reports ``local_path: null`` with the error.
+        """
+        if record.cover_url is None:
+            return None
+        if self._reader.cover_file(book_id) is not None:  # already has a cover
+            return None
+        try:
+            local_path = self._enricher.download_cover(record.cover_url)
+        except EnrichmentSourceError as exc:  # LOOKUP-09: non-fatal
+            return {"url": record.cover_url, "local_path": None, "error": str(exc)}
+        return {"url": record.cover_url, "local_path": str(local_path)}
 
     def find_duplicates(self) -> dict[str, Any]:
         """Return groups of likely-duplicate books, advisory only (ORG-01).
@@ -350,6 +595,66 @@ class CalibreLibrary:
             "status": "applied",
             "book_id": book_id,
             "book": self._reader.get_book(book_id),  # re-read (EDIT-02)
+            "backup": str(backup),
+        }
+
+    def set_cover(
+        self,
+        book_id: int,
+        image_path: str | Path,
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        """Set a book's cover from a local image file via plan->confirm
+        (COVER-02, SCOVER-01..07).
+
+        Cover-typed twin of ``update_metadata``: validates BEFORE any backup
+        that the book exists (SCOVER-04) and ``image_path`` is an existing
+        file (SCOVER-02) with a supported image extension (SCOVER-03) --
+        ``calibredb`` silently no-ops on a missing/bad path, so this guard is
+        mandatory, not optional. Plan step (no token): reports whether the
+        book currently has a cover (``current_has_cover`` -- replace vs add,
+        SCOVER-07) via ``cover_file`` (COVER-01) and the resolved image path,
+        plus a deterministic ``confirmation_token``; nothing is written. Apply
+        step (token): verifies the token (SCOVER-06), backs up
+        ``metadata.db`` once, sets the cover via ``calibredb set_metadata
+        --field cover:<path>`` (runner unchanged), then RE-READS the cover
+        state so the result is demonstrated, not asserted (SCOVER-05).
+        """
+        self._reader.get_book(book_id)  # SCOVER-04: exists-precheck, no write
+        path = Path(image_path)
+        if not path.is_file():  # SCOVER-02: before any backup/write
+            raise InvalidInputError(f"set_cover: not an existing file: {path}")
+        if path.suffix.lower() not in _IMAGE_SUFFIXES:  # SCOVER-03
+            allowed = ", ".join(sorted(_IMAGE_SUFFIXES))
+            raise InvalidInputError(
+                f"set_cover: unsupported image extension {path.suffix!r}; "
+                f"allowed: {allowed}"
+            )
+
+        resolved = str(path)
+        payload = {"image_path": resolved}
+
+        if token is None:
+            current = self._reader.cover_file(book_id) is not None
+            return {
+                "status": "plan",
+                "book_id": book_id,
+                "current_has_cover": current,  # SCOVER-01/07: replace vs add
+                "new_cover": resolved,
+                "confirmation_token": plan_token(_OP_SET_COVER, book_id, payload),
+            }
+
+        verify(_OP_SET_COVER, book_id, payload, token)  # SCOVER-06 mismatch -> raise
+        backup = backup_metadata_db(  # SCOVER-05: once, before the write
+            self._config.db_path, self._config.backup_root
+        )
+        self._runner.set_metadata(book_id, {"cover": resolved})
+        new_cover = self._reader.cover_file(book_id)  # SCOVER-05: re-read, demonstrate
+        return {
+            "status": "applied",
+            "book_id": book_id,
+            "has_cover": new_cover is not None,
+            "cover_path": str(new_cover) if new_cover is not None else None,
             "backup": str(backup),
         }
 

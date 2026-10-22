@@ -81,6 +81,12 @@ The server manages **one** library, set via environment variable:
 The server **fails fast** at startup with a clear error if `CALIBRE_LIBRARY_PATH` is unset or the
 directory has no `metadata.db`.
 
+> **If you move the library on disk, update the path in _two_ places** — this server's
+> `CALIBRE_LIBRARY_PATH` (host MCP config) *and* the Calibre GUI's own `library_path`
+> (`~/.config/calibre/global.py.json`). They are independent; a stale env just fails fast at
+> startup. See AD-028 in `.specs/STATE.md` for why there is no single source of truth (by design,
+> for now).
+
 `email_book` additionally needs SMTP relay credentials (loaded lazily — the server boots fine
 without them, and only `email_book` fails if they're missing):
 
